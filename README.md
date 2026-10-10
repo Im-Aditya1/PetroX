@@ -1,0 +1,81 @@
+# PetroX
+
+PetroX is a trailblazer in server deployment and management, offering advanced solutions that make complex server processes simpler and more efficient. Our technology empowers businesses to focus on growth by efficiently handling server allocation and deployment. Designed to meet a wide range of business needs, our scalable and reliable solutions are at the forefront of server management technology.
+
+This module is an enhanced version of the original [Pterodactyl WHMCS module](https://github.com/pterodactyl/whmcs). It builds on the solid foundation of Pterodactyl, known for its robust and user-friendly server management capabilities, by adding additional features and improvements to further refine server management tasks. Among these enhancements is the support for multiple port allocations, catering to games and applications that require complex networking setups.
+
+## Technical Requirements
+
+- **PHP Version**: PHP 8.0 or higher.
+- **WHMCS Compatibility**: Works with versions of WHMCS that support PHP 8.0 or higher.
+
+## Enhanced Features
+
+- **Automated Port Allocation**: Simplifies server setup by automatically assigning ports, minimizing manual configuration.
+
+- **Intelligent User Management**: Efficiently handles user accounts and permissions, ensuring streamlined operations and robust security.
+
+- **Custom Server Environment Setup**: Provides the ability to tailor server environments to specific needs.
+
+- **Dynamic Server Configuration**: Dynamically adjusts server settings to optimize performance and resource management.
+
+- **Advanced Server Deployment**: Utilizes state-of-the-art techniques for fast and effective server deployment.
+
+- **Port Offset Support**: Offers enhanced port configuration options, ideal for applications requiring a query port that is offset from the main server port. This feature improves network setup flexibility and connectivity.
+
+- **Multiple Port Allocation**: Facilitates the allocation of multiple ports for complex networking requirements, a significant feature for games and applications with specific port needs. For more details, see our [FAQ section](#FAQ).
+
+- **Default Variables Support**: Enables pre-setting common variables for faster and more consistent server setups.
+
+- **Game Server Status**: Enables the display of game server status, including current player count and online/offline status, providing real-time insights directly within your panel.
+
+- **WHMCS Pterodactyl Sync**: Offers a comprehensive solution for syncing client data between WHMCS and Pterodactyl, ensuring a cohesive ecosystem.
+
+
+Leverage the PetroX module to upgrade your server management experience, utilizing the latest innovations for the ever-evolving demands of today's business environment.
+
+# Module Installation Guide
+
+Follow these steps to install and configure the PetroX module.
+
+## Step 1: Download and Unzip
+Download the module zip file and unzip it to find the `petrox` folder.
+
+## Step 2: Upload to WHMCS
+Upload the `petrox` folder to your WHMCS installation at `/path/to/whmcs/modules/servers/`
+
+## Step 3: Configure config.json
+Adjust the `config.json` in the module folder as needed.
+
+## Step 4: Server Configuration in WHMCS
+Set up a WHMCS server for PetroX:
+1. Go to **Setup** -> **Products/Services** -> **Servers** and create a new server.
+2. Enter your Pterodactyl panel URL as the **Hostname**.
+3. Select **PetroX** as the module under **Server Details**.
+4. Leave the **Username** field blank.
+5. In Pterodactyl, create an Application API key with necessary permissions and put it in the **Password** field of WHMCS.
+6. If you enable customer server reboot from WHMCS, create an Account API key using a Pterodactyl Admin account and put it in the **Access Hash** field.
+7. Check the **Secure** checkbox for SSL if applicable.
+8. Click **Save Changes**.
+
+## Step 5: Activate and Test
+Activate the module in WHMCS and test for proper functionality.
+
+
+# FAQ
+
+## My Game Requires Multiple Ports Allocated
+
+Our module supports games or applications that require multiple ports. We've implemented a comprehensive solution to facilitate the allocation of multiple ports as needed.
+
+## Overwriting Values Through Configurable Options
+Values can be overwritten using either Configurable Options or Custom Fields.
+
+The name should exactly match what you want to overwrite. For example, `dedicated_ip` will overwrite the `dedicated_ip` value based on its selection. Valid options include `server_name`, `memory`, `swap`, `io`, `cpu`, `disk`, `nest_id`, `egg_id`, `pack_id`, `location_id`, `dedicated_ip`, `ports_ranges`, `image`, `startup`, `databases`, `allocations`, `backups`, `oom_disabled`, `username`.
+
+This approach also applies to any environment variable name. For instance, `Player Slots` will overwrite the environment variable named "Player Slots" to its value.
+
+Useful trick: You can use the | separator to change the display name of the variable like this: dedicated_ip|Dedicated IP => Will be displayed as "Dedicated IP" but will work correctly.
+
+## Couldn't find any nodes satisfying the request
+This can be caused from any of the following: Wrong location, not enough disk space/CPU/RAM, or no allocations matching the provided criteria.
