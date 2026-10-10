@@ -35,24 +35,38 @@ function loadSelect2(element, intSelect2) {
 }
 
 function filterEggs(eggElement, nestId) {
+    if (!eggElement || !eggElement.length) return;
+
+    let hasNestSpecificOptions = false;
     eggElement.find('option').each(function () {
         const optionName = $(this).text();
-        // Check if the optionValue contains the selectedValue in parentheses
-        if (optionName.includes(`(${nestId})`)) {
-            $(this).show(); // Show the option
-        } else {
-            $(this).attr('selected', false)
-            $(this).hide(); // Hide the option if it doesn't match
+        if (nestId && nestId !== '0' && optionName.includes(`(${nestId})`)) {
+            hasNestSpecificOptions = true;
         }
     });
-    // Check if there's already a selected option within eggElement
+
+    // In Pterodactyl v2, nests are removed and replaced by tags.
+    // If no options carry (nestId) or nestId is empty/0, keep all eggs visible.
+    if (!hasNestSpecificOptions || !nestId || nestId === '0') {
+        eggElement.find('option').show();
+        return;
+    }
+
+    eggElement.find('option').each(function () {
+        const optionName = $(this).text();
+        if (optionName.includes(`(${nestId})`)) {
+            $(this).show();
+        } else {
+            $(this).prop('selected', false);
+            $(this).hide();
+        }
+    });
+
     if (!eggElement.find('option:selected').length) {
         eggElement.find('option').each(function () {
-            // Check if the option is visible
             if ($(this).css('display') !== 'none') {
-                // Set the first visible option as selected
                 $(this).prop("selected", true);
-                return false; // Exit the loop after setting the first visible option
+                return false;
             }
         });
     }

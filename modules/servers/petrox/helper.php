@@ -1,11 +1,11 @@
 <?php
 
-
 use Illuminate\Database\Capsule\Manager as Capsule;
 
 class PetroXInstance
 {
     private static PetroXInstance|null $instance = null;
+    public static $mockApiHandler = null;
     public $swap_as_gb = false;
     public $disk_as_gb = false;
     public $memory_as_gb = false;
@@ -17,10 +17,7 @@ class PetroXInstance
 
     public $game_panel = "pterodactyl";
 
-   // public $server_port_offset = 0;
-
     public $dynamic_variables = [];
-
     public $dynamic_environment_array = [];
 
     public $jsPath = '';
@@ -28,13 +25,13 @@ class PetroXInstance
 
     public array $panelCurlConfig = [
         'user' => 'PetroX',
-        'accept' => 'Application/vnd.pterodactyl.v1+json'
+        'accept' => 'application/json, application/vnd.pterodactyl.v1+json'
     ];
 
     public array $curlRequestSettings = [
         'pterodactyl' => [
             'user' => 'PetroX',
-            'accept' => 'Application/vnd.pterodactyl.v1+json'
+            'accept' => 'application/json, application/vnd.pterodactyl.v1+json'
         ],
         'wisp' => [
             'user' => 'WISP',
@@ -43,25 +40,16 @@ class PetroXInstance
     ];
 
     public $fetchingPagination = [];
-    /**
-     * @var true
-     */
     public bool $fetching = true;
     public int $fetchingNextPage = 1;
     public array $fetchedResults = [];
     public array $hooksData = [];
     public bool $use_alias_ip = false;
     public $service_id = 0;
-    /**
-     * @var false|mixed
-     */
     public $dedicated_ip = false;
     public string $server_ip = "0";
     public int $server_port = 0;
     public string|bool $server_alias_ip = false;
-    /**
-     * @var array|mixed
-     */
     public array $node = [];
     public array $node_allocations = [];
     public array $variables = [];
@@ -69,25 +57,25 @@ class PetroXInstance
 
     public function __construct()
     {
-
         global $CONFIG;
-        $data = file_get_contents(dirname(__FILE__) . '/config.json');
-        $data = json_decode($data, true);
-        if (!$data) {
-            throw new Exception('PetroX Config file not valid json format!');
-        }
-        foreach ($data as $key => $value) {
-            $this->$key = $value;
+        $configFile = dirname(__FILE__) . '/config.json';
+        if (file_exists($configFile)) {
+            $data = file_get_contents($configFile);
+            $data = json_decode($data, true);
+            if ($data && is_array($data)) {
+                foreach ($data as $key => $value) {
+                    $this->$key = $value;
+                }
+            }
         }
         if (isset($this->curlRequestSettings[$this->game_panel])) {
             $this->panelCurlConfig = $this->curlRequestSettings[$this->game_panel];
         }
 
-        $whmcsBaseUrl = rtrim($CONFIG['SystemURL'], '/');
+        $whmcsBaseUrl = isset($CONFIG['SystemURL']) ? rtrim($CONFIG['SystemURL'], '/') : '';
         $this->jsPath = $whmcsBaseUrl . '/modules/servers/petrox/petrox.js?v=' . time();
         $this->cssPath = $whmcsBaseUrl . '/modules/servers/petrox/petrox.css?v=' . time();
     }
-
 
     public static function get(): ?PetroXInstance
     {
@@ -103,14 +91,16 @@ class PetroXInstance
             $server = Capsule::table('tblservers')
                 ->where('type', 'petrox')
                 ->first();
-            $this->server = [
-                'serverhostname' => $server->hostname,
-                'serverusername' => $server->username,
-                'serverpassword' => decrypt($server->password),
-                'serveraccesshash' => $server->accesshash,
-                'serversecure' => $server->secure,
-                'serverport' => $server->port,
-            ];
+            if ($server) {
+                $this->server = [
+                    'serverhostname' => $server->hostname,
+                    'serverusername' => $server->username,
+                    'serverpassword' => decrypt($server->password),
+                    'serveraccesshash' => $server->accesshash,
+                    'serversecure' => $server->secure,
+                    'serverport' => $server->port,
+                ];
+            }
         }
         return $this->server;
     }
@@ -135,7 +125,6 @@ class PetroXInstance
             logModuleCall("PetroX-WHMCS", 'Could not find valid client data for the given client id.', ['clientId' => $id], '', '');
             return false;
         }
-
     }
 
     public function changePterodactylPassword($userResult, $params, $password)
@@ -147,7 +136,9 @@ class PetroXInstance
             'last_name' => $userResult['attributes']['last_name'],
             'password' => $password
         ], 'PATCH');
-        if ($updateResult['status_code'] !== 200) throw new Exception('Failed to change password, received error code: ' . $updateResult['status_code'] . '.');
+        if ($updateResult['status_code'] !== 200) {
+            throw new Exception('Failed to change password: ' . petroXFormatError($updateResult));
+        }
     }
 
     public function updatePterodactylUserData($userResult, $params, $column): void
@@ -163,61 +154,60 @@ class PetroXInstance
         $updateResult = petroXApplicationApi($params, 'users/' . $userResult['attributes']['id'], $arr, 'PATCH');
 
         if ($updateResult['status_code'] !== 200) {
-            $message = 'Failed to change ' . json_encode($column) . ', received error code: ' . $updateResult['status_code'] . '.';
-            if (isset($updateResult['errors']) && is_array($updateResult['errors'])) {
-                $message = 'Failed to update user details: ';
-                foreach ($updateResult['errors'] as $error) {
-                    $message .= $error['detail'] . '<br>';
-                }
-            }
-            throw new Exception($message);
+            throw new Exception('Failed to update user details: ' . petroXFormatError($updateResult));
         }
-
     }
 
     public function getPterodactylUser($params, array $client = [], $create = true)
     {
-        $userResult = petroXApplicationApi($params, 'users/external/' . $client['id']);
-        if ($userResult['status_code'] === 404) {
-            if (!isset($client['email'])) return $userResult;
+        $clientId = (string)($client['id'] ?? '');
+        $userResult = petroXApplicationApi($params, 'users/external/' . urlencode($clientId));
 
-            if (PetroXInstance::get()->game_panel == 'wisp') {
+        if ($userResult['status_code'] === 404) {
+            if (!isset($client['email']) || $client['email'] === '') return $userResult;
+
+            if ($this->game_panel === 'wisp') {
                 $userResult = petroXApplicationApi($params, 'users?search=' . urlencode($client['email']));
-            } elseif (PetroXInstance::get()->game_panel == 'pterodactyl') {
+            } else {
                 $userResult = petroXApplicationApi($params, 'users?filter[email]=' . urlencode($client['email']));
             }
 
-            if ($create === true && $userResult['meta']['pagination']['total'] === 0) {
+            $total = $userResult['meta']['pagination']['total'] ?? (isset($userResult['data']) ? count($userResult['data']) : 0);
+
+            if ($create === true && $total === 0) {
                 $userResult = $this->createPteroUser($client, $params);
             } else {
-                if ($userResult['meta']['pagination']['total'] === 0) {
+                if ($total === 0) {
                     $userResult['status_code'] = 404;
                 }
-                if ($userResult['status_code'] !== 404) {
-                    foreach ($userResult['data'] as $key => $value) {
-                        if (strtolower($value['attributes']['email']) == strtolower($client['email'])) {
+                if ($userResult['status_code'] !== 404 && !empty($userResult['data'])) {
+                    $matched = false;
+                    foreach ($userResult['data'] as $value) {
+                        if (strtolower($value['attributes']['email'] ?? '') === strtolower($client['email'])) {
                             $userResult = $value;
                             $userResult['status_code'] = 200;
-                            //Let's update the external_id to match the actual client id.
-                            $arr['external_id'] = (string)$client['id'];
-                            if (isset($client['password'])) {
+                            // Sync external_id to match WHMCS client ID
+                            $arr = ['external_id' => $clientId];
+                            if (isset($client['password']) && $client['password'] !== '') {
                                 $arr['password'] = $client['password'];
                             }
                             $this->updatePterodactylUserData($userResult, $params, $arr);
+                            $matched = true;
                             break;
                         }
                     }
-                }
-
-                if ($userResult['status_code'] === 404) {
+                    if (!$matched && $create === true) {
+                        $userResult = $this->createPteroUser($client, $params);
+                    } elseif (!$matched) {
+                        $userResult = ['status_code' => 404];
+                    }
+                } elseif ($create === true) {
                     $userResult = $this->createPteroUser($client, $params);
                 }
-
             }
         }
         return $userResult;
     }
-
 
     public function addFileLog($data, $title = 'Log')
     {
@@ -226,18 +216,17 @@ class PetroXInstance
 
         if (!is_dir($logDir)) {
             mkdir($logDir, 0755, true);
-            chown($logDir, fileowner(__FILE__));
-            chgrp($logDir, filegroup(__FILE__));
         }
+        $sanitizedData = petroXSanitizeForLog($data);
         $content = PHP_EOL;
         $content .= PHP_EOL;
         $content .= 'START: ' . $title . PHP_EOL;
         $content .= 'Time: ' . date('Y-m-d H:i:s');
         $content .= PHP_EOL;
-        $content .= print_r($data, true);
+        $content .= print_r($sanitizedData, true);
         $content .= PHP_EOL;
         $content .= 'END: ' . $title;
-        file_put_contents($file, $content, FILE_APPEND);
+        @file_put_contents($file, $content, FILE_APPEND);
     }
 
     public function getDynamicEnvironmentArray(): array
@@ -245,12 +234,6 @@ class PetroXInstance
         return $this->dynamic_environment_array;
     }
 
-    /**
-     * @param array $client
-     * @param array $arr
-     * @param $params
-     * @return mixed
-     */
     private function createPteroUser(array $client, $params): mixed
     {
         $arr = [
@@ -260,39 +243,163 @@ class PetroXInstance
             'last_name' => $client['lastname'],
             'external_id' => (string)$client['id'],
         ];
-        if (isset($client['password'])) {
+        if (isset($client['password']) && $client['password'] !== '') {
             $arr['password'] = $client['password'];
         }
-        return petroXApplicationApi($params, 'users', $arr, 'POST');
+        $res = petroXApplicationApi($params, 'users', $arr, 'POST');
+        if ($res['status_code'] !== 200 && $res['status_code'] !== 201) {
+            throw new Exception('Failed to create Pterodactyl user: ' . petroXFormatError($res));
+        }
+        return $res;
     }
+}
+
+/**
+ * Recursively sanitize sensitive keys and tokens from data structures prior to logging.
+ */
+function petroXSanitizeForLog($data)
+{
+    if (is_string($data)) {
+        return preg_replace('/Bearer\s+[A-Za-z0-9_\-\.]+/i', 'Bearer [REDACTED]', $data);
+    }
+    if (!is_array($data)) {
+        return $data;
+    }
+
+    $sensitiveKeys = [
+        'password', 'serverpassword', 'serveraccesshash', 'accesshash',
+        'token', 'secret', 'api_key', 'apikey', 'auth'
+    ];
+
+    $sanitized = [];
+    foreach ($data as $key => $value) {
+        $keyLower = strtolower((string)$key);
+        $isSensitive = in_array($keyLower, $sensitiveKeys, true) ||
+            str_contains($keyLower, 'password') ||
+            str_contains($keyLower, 'secret') ||
+            str_contains($keyLower, 'token');
+
+        if ($isSensitive) {
+            $sanitized[$key] = '[REDACTED]';
+        } elseif (is_array($value)) {
+            $sanitized[$key] = petroXSanitizeForLog($value);
+        } elseif (is_string($value)) {
+            $sanitized[$key] = petroXSanitizeForLog($value);
+        } else {
+            $sanitized[$key] = $value;
+        }
+    }
+    return $sanitized;
+}
+
+/**
+ * Format API responses into human-readable, actionable error messages.
+ */
+function petroXFormatError(mixed $result, string $defaultMsg = 'An error occurred while communicating with the panel.'): string
+{
+    if (!is_array($result)) {
+        return $defaultMsg;
+    }
+
+    $statusCode = $result['status_code'] ?? 0;
+    $details = [];
+
+    // Extract Pterodactyl validation errors
+    if (!empty($result['errors']) && is_array($result['errors'])) {
+        foreach ($result['errors'] as $err) {
+            if (!is_array($err)) continue;
+            $msg = $err['detail'] ?? ($err['title'] ?? '');
+            $field = $err['source']['field'] ?? ($err['meta']['source_field'] ?? '');
+            if ($field !== '') {
+                $fieldClean = str_replace(['environment.', 'limits.', 'feature_limits.'], '', $field);
+                $details[] = "[$fieldClean] $msg";
+            } elseif ($msg !== '') {
+                $details[] = $msg;
+            }
+        }
+    }
+
+    if (!empty($details)) {
+        return implode('; ', $details);
+    }
+
+    if ($statusCode === 0 && !empty($result['curl_error'])) {
+        return 'Connection failure: ' . $result['curl_error'];
+    }
+
+    return match ($statusCode) {
+        400 => 'Bad Request (HTTP 400): The panel rejected the request or no viable node/allocation could be found.',
+        401 => 'Unauthorized (HTTP 401): Invalid or missing Application API key. Please verify your WHMCS server password setting.',
+        403 => 'Forbidden (HTTP 403): The API key does not have sufficient permissions for this operation.',
+        404 => 'Not Found (HTTP 404): The requested resource does not exist on the panel.',
+        409 => 'Conflict (HTTP 409): The requested operation conflicts with the server\'s current state.',
+        422 => 'Validation Error (HTTP 422): One or more fields failed panel validation.',
+        429 => 'Rate Limited (HTTP 429): Too many requests sent to the Pterodactyl panel. Please retry later.',
+        500 => 'Internal Server Error (HTTP 500): The Pterodactyl panel encountered an internal error. Check panel logs.',
+        502, 503, 504 => "Gateway Error (HTTP $statusCode): The Pterodactyl panel or Wings daemon is unreachable or timed out.",
+        default => $defaultMsg !== '' ? $defaultMsg : "Unexpected API response (HTTP $statusCode).",
+    };
 }
 
 function petroXLog(string $action, string $string, array $array)
 {
-    logModuleCall("PetroX-WHMCS", $action, $string, $array);
+    if (function_exists('logModuleCall')) {
+        logModuleCall("PetroX-WHMCS", $action, $string, petroXSanitizeForLog($array));
+    }
 }
 
 function petroXGetHostname(array $params)
 {
+    $hostname = trim($params['serverhostname'] ?? '');
 
-    $hostname = $params['serverhostname'];
+    if ($hostname === '') {
+        throw new Exception('Could not find the panel\'s hostname - did you configure server group for the product?');
+    }
 
-    if ($hostname === '') throw new Exception('Could not find the panel\'s hostname - did you configure server group for the product?');
-    // For whatever reason, WHMCS converts some characters of the hostname to their literal meanings (- => dash, etc) in some cases
     foreach ([
-                 'DOT' => '.',
-                 'DASH' => '-',
-             ] as $from => $to) {
+        'DOT' => '.',
+        'DASH' => '-',
+    ] as $from => $to) {
         $hostname = str_replace($from, $to, $hostname);
     }
-    if (ip2long($hostname) !== false) $hostname = 'http://' . $hostname;
-    else $hostname = ($params['serversecure'] ? 'https://' : 'http://') . $hostname;
+
+    // Strip existing scheme prefix to prevent duplicate protocols (e.g. https://https://...)
+    $hostname = preg_replace('#^https?://#i', '', $hostname);
+
+    if (ip2long($hostname) !== false) {
+        $hostname = 'http://' . $hostname;
+    } else {
+        $hostname = (!empty($params['serversecure']) ? 'https://' : 'http://') . $hostname;
+    }
     return rtrim($hostname, '/');
 }
 
-function petroXApiHandler(mixed $method, array $data, CurlHandle|false $curl, array $headers, mixed $dontLog, string $url): mixed
+function petroXApiHandler(mixed $method, array $data, mixed $curl, array $headers, mixed $dontLog, string $url): mixed
 {
-    if ($method === 'POST' || $method === 'PATCH') {
+    if (PetroXInstance::$mockApiHandler !== null) {
+        $mock = PetroXInstance::$mockApiHandler;
+        $mockResponse = $mock($method, $url, $data, $headers);
+        if (!is_array($mockResponse)) {
+            $mockResponse = [];
+        }
+        if (!$dontLog && function_exists('logModuleCall')) {
+            $sanitizedData = petroXSanitizeForLog($data);
+            $sanitizedResponse = petroXSanitizeForLog($mockResponse);
+            logModuleCall(
+                "PetroX-WHMCS",
+                $method . " - " . $url,
+                !empty($sanitizedData) ? json_encode($sanitizedData) : "",
+                print_r($sanitizedResponse, true)
+            );
+        }
+        return $mockResponse;
+    }
+
+    if (!$curl) {
+        return ['status_code' => 0, 'curl_error' => 'Failed to initialize cURL handle.'];
+    }
+
+    if ($method === 'POST' || $method === 'PATCH' || $method === 'PUT') {
         $jsonData = json_encode($data);
         curl_setopt($curl, CURLOPT_POSTFIELDS, $jsonData);
         $headers[] = "Content-Type: application/json";
@@ -302,39 +409,52 @@ function petroXApiHandler(mixed $method, array $data, CurlHandle|false $curl, ar
     curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
 
     $response = curl_exec($curl);
-    $responseData = json_decode($response, true);
-    $responseData['status_code'] = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-
-    if ($responseData['status_code'] === 0 && !$dontLog) logModuleCall("PetroX-WHMCS", "CURL ERROR", curl_error($curl), "");
-
+    $curlError = curl_error($curl);
+    $statusCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
     curl_close($curl);
-    if (isset($data['password'])) {
-        //let's unset that ?
-        unset($data['password']);
+
+    $responseData = json_decode($response, true);
+    if (!is_array($responseData)) {
+        $responseData = [];
+        if ($response !== false && $response !== '') {
+            $responseData['raw_body'] = $response;
+        }
     }
-    if (!$dontLog) logModuleCall("PetroX-WHMCS", $method . " - " . $url,
-        isset($data) ? json_encode($data) : "",
-        print_r($responseData, true));
+    $responseData['status_code'] = $statusCode;
+    if ($statusCode === 0) {
+        $responseData['curl_error'] = $curlError;
+    }
+
+    if (!$dontLog && function_exists('logModuleCall')) {
+        $sanitizedData = petroXSanitizeForLog($data);
+        $sanitizedResponse = petroXSanitizeForLog($responseData);
+        logModuleCall(
+            "PetroX-WHMCS",
+            $method . " - " . $url,
+            !empty($sanitizedData) ? json_encode($sanitizedData) : "",
+            print_r($sanitizedResponse, true)
+        );
+    }
 
     return $responseData;
 }
 
-/**
- * @param string $url
- * @param mixed $method
- * @return CurlHandle|false
- */
-function getCurl_init(string $url, mixed $method): false|CurlHandle
+function getCurl_init(string $url, mixed $method)
 {
+    if (!function_exists('curl_init')) {
+        return false;
+    }
     $curl = curl_init();
     curl_setopt($curl, CURLOPT_URL, $url);
     curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
     curl_setopt($curl, CURLOPT_CUSTOMREQUEST, $method);
-    curl_setopt($curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
     curl_setopt($curl, CURLOPT_USERAGENT, PetroXInstance::get()->panelCurlConfig['user'] . "-WHMCS");
     curl_setopt($curl, CURLOPT_FOLLOWLOCATION, 1);
     curl_setopt($curl, CURLOPT_POSTREDIR, CURL_REDIR_POST_301);
-    curl_setopt($curl, CURLOPT_TIMEOUT, 5);
+    curl_setopt($curl, CURLOPT_TIMEOUT, 30);
+    curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 1);
+    curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
     return $curl;
 }
 
@@ -342,73 +462,148 @@ function petroXApplicationApi(array $params, $endpoint, array $data = [], $metho
 {
     $url = petroXGetHostname($params) . '/api/application/' . $endpoint;
 
-    $curl = getCurl_init($url, $method);
-
     $headers = [
-        "Authorization: Bearer " . $params['serverpassword'],
+        "Authorization: Bearer " . ($params['serverpassword'] ?? ''),
         "Accept: " . PetroXInstance::get()->panelCurlConfig['accept'],
     ];
 
+    if (PetroXInstance::$mockApiHandler !== null) {
+        return petroXApiHandler($method, $data, null, $headers, $dontLog, $url);
+    }
+
+    $curl = getCurl_init($url, $method);
+
     return petroXApiHandler($method, $data, $curl, $headers, $dontLog, $url);
 }
-
 
 function petroXClientApi(array $params, $endPoint, array $data = [], $method = "GET", $dontLog = false)
 {
     $url = petroXGetHostname($params) . '/api/client/' . $endPoint;
-    $curl = getCurl_init($url, $method);
 
     $headers = [
-        "Authorization: Bearer " . $params['serveraccesshash'],
+        "Authorization: Bearer " . ($params['serveraccesshash'] ?? ''),
         "Accept: " . PetroXInstance::get()->panelCurlConfig['accept'],
     ];
+
+    if (PetroXInstance::$mockApiHandler !== null) {
+        return petroXApiHandler($method, $data, null, $headers, $dontLog, $url);
+    }
+
+    $curl = getCurl_init($url, $method);
 
     return petroXApiHandler($method, $data, $curl, $headers, $dontLog, $url);
 }
 
+/**
+ * Handle paginated Application API requests across all pages up to $maxPages.
+ */
+function petroXApplicationApiPaginated(array $params, string $endpoint, array $data = [], string $method = "GET", int $maxPages = 20): array
+{
+    $allData = [];
+    $page = 1;
+    $separator = str_contains($endpoint, '?') ? '&' : '?';
+
+    do {
+        $paginatedEndpoint = $endpoint . $separator . 'page=' . $page . '&per_page=100';
+        $res = petroXApplicationApi($params, $paginatedEndpoint, $data, $method, true);
+        if ($res['status_code'] !== 200) {
+            if ($page === 1) return $res;
+            break;
+        }
+        if (isset($res['data']) && is_array($res['data'])) {
+            foreach ($res['data'] as $item) {
+                $allData[] = $item;
+            }
+        } else {
+            break;
+        }
+
+        $currentPage = $res['meta']['pagination']['current_page'] ?? $page;
+        $totalPages = $res['meta']['pagination']['total_pages'] ?? 1;
+        $page++;
+    } while ($currentPage < $totalPages && $page <= $maxPages);
+
+    return [
+        'status_code' => 200,
+        'data' => $allData,
+    ];
+}
+
+/**
+ * Retrieve egg data with variables, supporting Pterodactyl v2 directly with v1 nest fallback.
+ */
+function petroXGetEggData(array $params, $eggId, $nestId = null)
+{
+    // Try Pterodactyl v2 endpoint first (eggs are top-level resources in v2)
+    $eggData = petroXApplicationApi($params, 'eggs/' . (int)$eggId . '?include=variables,tags');
+    if ($eggData['status_code'] === 200) {
+        return $eggData;
+    }
+
+    // Fall back to Pterodactyl v1 nested endpoint if nest_id is provided
+    if ($nestId && (int)$nestId > 0) {
+        $v1Data = petroXApplicationApi($params, 'nests/' . (int)$nestId . '/eggs/' . (int)$eggId . '?include=variables');
+        if ($v1Data['status_code'] === 200) {
+            return $v1Data;
+        }
+    }
+
+    return $eggData;
+}
+
 function petroXGetMemorySwapAndDisk($params)
 {
-
     $memory = petroXGetOption($params, 'memory');
     if (!is_numeric($memory) && ($memory != '0' && $memory != '')) {
-        throw new Exception('Invalid memory value provided. Please enter a valid integer. For example: 1, 2, 3, etc. Don\'t forgot to check your Configuration Options also.');
+        throw new Exception('Invalid memory value provided. Please enter a valid integer. For example: 1, 2, 3, etc. Don\'t forget to check your Configuration Options.');
     }
     if (PetroXInstance::get()->memory_as_gb) {
         $memory = petroXConvertToMB($memory);
     }
 
-    $swap = (int)petroXGetOption($params, 'swap');
+    $swap = petroXGetOption($params, 'swap');
     if (!is_numeric($swap) && ($swap != '0' && $swap != '')) {
-        throw new Exception('Invalid swap value provided. Please enter a valid integer. For example: 1, 2, 3, etc. Don\'t forgot to check your Configuration Options also.');
+        throw new Exception('Invalid swap value provided. Please enter a valid integer. For example: 0, 512, etc.');
     }
-
-    if (PetroXInstance::get()->swap_as_gb) {
+    $swap = (int)$swap;
+    if (PetroXInstance::get()->swap_as_gb && $swap > 0) {
         $swap = petroXConvertToMB($swap);
     }
 
-    $disk = (int)petroXGetOption($params, 'disk');
+    $disk = petroXGetOption($params, 'disk');
     if (!is_numeric($disk) && ($disk != '0' && $disk != '')) {
-        throw new Exception('Invalid disk value provided. Please enter a valid integer. For example: 1, 2, 3, etc. Don\'t forgot to check your Configuration Options also.');
+        throw new Exception('Invalid disk value provided. Please enter a valid integer. For example: 10, 20, 1024, etc.');
     }
+    $disk = (int)$disk;
     if (PetroXInstance::get()->disk_as_gb) {
         $disk = petroXConvertToMB($disk);
     }
 
-    return [$memory, $swap, $disk];
+    return [(int)$memory, (int)$swap, (int)$disk];
 }
 
 function petroXGetServer(array $params, $raw = false, $include = false)
 {
-    if ($include) {
-        $include = '?include=' . $include;
-    }
-    $serverResult = petroXApplicationApi($params, 'servers/external/' . $params['serviceid'] . $include, [], 'GET', true);
+    $queryString = $include ? ('?include=' . $include) : '';
+    $serviceId = (string)$params['serviceid'];
 
-    if ($serverResult['status_code'] === 200) {
-        if ($raw) return $serverResult['attributes'];
-        else return $serverResult['attributes']['id'];
-    } else if ($serverResult['status_code'] === 500) {
-        throw new Exception('Failed to get server, panel errored. Check panel logs for more info.');
+    // 1. First attempt: lookup by external_id (WHMCS service ID)
+    $serverResult = petroXApplicationApi($params, 'servers/external/' . urlencode($serviceId) . $queryString, [], 'GET', true);
+    if ($serverResult['status_code'] === 200 && isset($serverResult['attributes'])) {
+        return $raw ? $serverResult['attributes'] : $serverResult['attributes']['id'];
+    }
+
+    // 2. Second attempt: lookup by stored UUID from custom fields if available
+    $uuid = $params['customfields']['UUID (Server ID)'] ?? null;
+    if ($uuid) {
+        $filterResult = petroXApplicationApi($params, 'servers?filter[uuid]=' . urlencode($uuid) . ($include ? ('&include=' . $include) : ''), [], 'GET', true);
+        if ($filterResult['status_code'] === 200 && !empty($filterResult['data'][0]['attributes'])) {
+            return $raw ? $filterResult['data'][0]['attributes'] : $filterResult['data'][0]['attributes']['id'];
+        }
+    }
+
+    if ($serverResult['status_code'] === 500) {
+        throw new Exception('Failed to get server, panel errored: ' . petroXFormatError($serverResult));
     }
     return false;
 }
@@ -417,11 +612,11 @@ function petroXGetServerVariables(array $params, $serverId)
 {
     $data = petroXClientApi($params, 'servers/' . $serverId . '/startup', [], 'GET', true);
     if ($data['status_code'] === 200) {
-        return [$data['data'], $data['meta']];
+        return [$data['data'] ?? [], $data['meta'] ?? []];
     } else if ($data['status_code'] === 500) {
-        throw new Exception('Failed to get server, panel errored. Check panel logs for more info.');
+        throw new Exception('Failed to get server startup variables, panel errored: ' . petroXFormatError($data));
     }
-    return false;
+    return [[], []];
 }
 
 function petroXGetClientServer($params, $serverId)
@@ -429,9 +624,9 @@ function petroXGetClientServer($params, $serverId)
     $serverResult = petroXClientApi($params, 'servers/' . $serverId . '?include=subusers', [], 'GET', true);
 
     if ($serverResult['status_code'] === 200) {
-        return $serverResult['attributes'];
+        return $serverResult['attributes'] ?? [];
     } else if ($serverResult['status_code'] === 500) {
-        throw new Exception('Failed to get server, panel errored. Check panel logs for more info.');
+        throw new Exception('Failed to get client server, panel errored: ' . petroXFormatError($serverResult));
     }
     return false;
 }
@@ -450,41 +645,47 @@ function petroXGenerateUsername($length = 8)
 function petroXConvertToMB($input)
 {
     if ($input == 0 || $input == '') return $input;
-    return $input * 1024;
+    return (int)($input * 1024);
 }
 
 function petroXGetNodeAllocations($params, $serverNode)
 {
-
     $node = [];
     $allocations = [];
-    $nodes = petroXApplicationApi($params, 'nodes?include=allocations');
-    if ($nodes) {
-        foreach ($nodes['data'] as $nodeData) {
-            $node = $nodeData['attributes'];
-            if ($node['id'] == $serverNode) {
-                $allocations = $node['relationships']['allocations']['data'];
-                break;
+
+    // Direct node allocations endpoint (paginated)
+    $allocationsResult = petroXApplicationApiPaginated($params, 'nodes/' . (int)$serverNode . '/allocations');
+    if ($allocationsResult['status_code'] === 200 && !empty($allocationsResult['data'])) {
+        $allocations = $allocationsResult['data'];
+    } else {
+        // Fallback: nodes?include=allocations
+        $nodes = petroXApplicationApi($params, 'nodes?include=allocations');
+        if ($nodes && isset($nodes['data'])) {
+            foreach ($nodes['data'] as $nodeData) {
+                $nodeCandidate = $nodeData['attributes'];
+                if ($nodeCandidate['id'] == $serverNode) {
+                    $node = $nodeCandidate;
+                    $allocations = $nodeCandidate['relationships']['allocations']['data'] ?? [];
+                    break;
+                }
             }
         }
     }
-    if (!$allocations){
-        throw new Exception('Cannot find any ports for node with id '.$serverNode .' please ensure you have created ports for that node.');
+
+    if (!$allocations) {
+        throw new Exception('Cannot find any allocations for node with ID ' . $serverNode . '. Please ensure you have created ports for that node.');
     }
+
     PetroXInstance::get()->node_allocations = $allocations;
     PetroXInstance::get()->node = $node;
+    return $allocations;
 }
 
 function petroX_calculatePortRange($serverPortRange, $offset)
 {
-    // Extract the start and end of the SERVER_PORT range
     [$start, $end] = explode('-', $serverPortRange);
-
-    // Calculate new start and end by adding the offset
     $newStart = ($start + $offset);
     $newEnd = $end + $offset;
-
-    // Return the new range as a string
     return $newStart . '-' . $newEnd;
 }
 
@@ -497,13 +698,13 @@ function petroXMakeIParray()
 
         foreach (PetroXInstance::get()->node_allocations as $allocation) {
             $attr = $allocation['attributes'];
-            if ($attr['assigned'] == 1 && $serverIp != $attr['ip']) {
+            if (!empty($attr['assigned']) && $serverIp !== $attr['ip']) {
                 $ipsToRemove[] = $attr['ip'];
             }
         }
 
         $allocations = array_filter(PetroXInstance::get()->node_allocations, function ($allocation) use ($ipsToRemove) {
-            return !in_array($allocation['attributes']['ip'], $ipsToRemove);
+            return !in_array($allocation['attributes']['ip'], $ipsToRemove, true);
         });
 
         PetroXInstance::get()->node_allocations = array_values($allocations);
@@ -513,9 +714,9 @@ function petroXMakeIParray()
         $attr = $allocation['attributes'];
         $ip = $attr['ip'];
         $ips[$ip][] = [
-            'port' => $attr['port'],
-            'assigned' => $attr['assigned'],
-            'id' => $attr['id']
+            'port' => (int)$attr['port'],
+            'assigned' => !empty($attr['assigned']) ? 1 : 0,
+            'id' => (int)$attr['id']
         ];
     }
 
@@ -529,11 +730,11 @@ function petroXMakeIParray()
     return $ips;
 }
 
-
 function petroXProcessAllocations($eggData, $ports)
 {
     $variables = [];
-    foreach ($eggData['attributes']['relationships']['variables']['data'] as $val) {
+    $varData = $eggData['attributes']['relationships']['variables']['data'] ?? [];
+    foreach ($varData as $val) {
         $attr = $val['attributes'];
         $var = $attr['env_variable'];
         if (isset($ports[$var])) {
@@ -541,23 +742,14 @@ function petroXProcessAllocations($eggData, $ports)
         }
     }
 
-//    if (PetroXInstance::get()->server_port_offset > 0) {
-//        $offset = PetroXInstance::get()->server_port + PetroXInstance::get()->server_port_offset;
-//        $variables = array_merge(['SERVER_PORT_OFFSET' => $offset . '-' . $offset], $variables);
-//    }
-
     if (isset($ports['EXTRA_ALLOCATION'])) {
         $extra = $ports['EXTRA_ALLOCATION'];
         $parts = explode(":", $extra);
 
         if (count($parts) > 1) {
-            $times = end($parts);
+            $times = (int)end($parts);
             $lastColonPos = strrpos($extra, ':');
-            if ($lastColonPos !== false) {
-                $modifiedString = substr($extra, 0, $lastColonPos);
-            } else {
-                $modifiedString = $extra;
-            }
+            $modifiedString = $lastColonPos !== false ? substr($extra, 0, $lastColonPos) : $extra;
         } else {
             $times = 1;
             $modifiedString = $extra;
@@ -572,45 +764,33 @@ function petroXProcessAllocations($eggData, $ports)
 function petroXfindFreePortsForVariables($ips_data, &$variables)
 {
     foreach ($ips_data as $ip => $ports) {
-        $allocatedPorts = []; // Track allocated ports per IP
+        $allocatedPorts = [];
         $freePorts = [];
         $foundAll = true;
 
         foreach ($variables as $var => $range) {
-            list($start, $end) = explode('-', $range);
-            $start = (int) $start;
-            $end = (int) $end;
+            $rangeParts = explode('-', $range);
+            $start = (int)$rangeParts[0];
+            $end = isset($rangeParts[1]) ? (int)$rangeParts[1] : $start;
             $foundPort = false;
 
             foreach ($ports as $port) {
-                if ($port['assigned'] == 1) continue; // Skip assigned ports
+                if (!empty($port['assigned'])) {
+                    // An assigned port is allowed if it is this server's own primary allocation matching SERVER_PORT
+                    $isOwnServerPrimary = ($var === 'SERVER_PORT'
+                        && (int)$port['port'] === PetroXInstance::get()->server_port
+                        && $ip === PetroXInstance::get()->server_ip);
+                    if (!$isOwnServerPrimary) {
+                        continue;
+                    }
+                }
 
                 if (!isset($allocatedPorts[$port['id']]) && $port['port'] >= $start && $port['port'] <= $end) {
                     $port['ip'] = $ip;
                     $freePorts[$var] = $port;
                     $allocatedPorts[$port['id']] = $port['port'];
                     $foundPort = true;
-
-
-//                    if ($var === 'SERVER_PORT' && !isset($variables['SERVER_PORT_OFFSET']) && PetroXInstance::get()->server_port_offset > 0) {
-//                        $offsetValue = $port['port'] + PetroXInstance::get()->server_port_offset;
-//
-//                        PetroXInstance::get()->addFileLog([
-//                            'offset' => $offsetValue,
-//                            'port' => $port['port']
-//                        ], 'New server port found!');
-//
-//                        // Find a matching offset port in the available ports
-//                        foreach ($ports as $offsetPort) {
-//                            if ($offsetPort['port'] == $offsetValue && !$offsetPort['assigned']) {
-//                                $offsetPort['ip'] = $ip;
-//                                $freePorts['SERVER_PORT_OFFSET'] = $offsetPort;
-//                                break;
-//                            }
-//                        }
-//                    }
-
-                    break; // Stop searching once a valid port is found for this variable
+                    break;
                 }
             }
 
@@ -632,26 +812,30 @@ function petroXfindFreePortsForAllVariablesOnIP($ports, $variables, $_SERVER_IP)
 {
     $freePorts = [];
     $foundAll = true;
-
-    $allocatedPorts = []; // Store allocated ports
+    $allocatedPorts = [];
 
     foreach ($variables as $var => $range) {
-        list($start, $end) = explode('-', $range);
+        $rangeParts = explode('-', $range);
+        $start = (int)$rangeParts[0];
+        $end = isset($rangeParts[1]) ? (int)$rangeParts[1] : $start;
         $foundPort = false;
 
         foreach ($ports as $port) {
-            if ($port['assigned'] == 1) continue;
-            if (!isset($allocatedPorts[$port['id']])) {
-                if ($port['port'] >= $start && $port['port'] <= $end) {
-                    $port['ip'] = $_SERVER_IP;
-                    $freePorts[$var] = $port;
-                    $allocatedPorts[$port['id']] = $port['port']; // Store allocated port to prevent reuse
-                    $foundPort = true;
-                    break;
+            if (!empty($port['assigned'])) {
+                $isOwnServerPrimary = ($var === 'SERVER_PORT'
+                    && (int)$port['port'] === PetroXInstance::get()->server_port
+                    && $_SERVER_IP === PetroXInstance::get()->server_ip);
+                if (!$isOwnServerPrimary) {
+                    continue;
                 }
             }
-
-
+            if (!isset($allocatedPorts[$port['id']]) && $port['port'] >= $start && $port['port'] <= $end) {
+                $port['ip'] = $_SERVER_IP;
+                $freePorts[$var] = $port;
+                $allocatedPorts[$port['id']] = $port['port'];
+                $foundPort = true;
+                break;
+            }
         }
 
         if (!$foundPort) {
@@ -660,54 +844,25 @@ function petroXfindFreePortsForAllVariablesOnIP($ports, $variables, $_SERVER_IP)
         }
     }
 
-    if ($foundAll) {
-        return $freePorts;
-    } else {
-        return [];
-    }
+    return $foundAll ? $freePorts : [];
 }
 
 function petroXSetServerPortVariables(&$variables, $serverPort, $ips, $isRange = false)
 {
     $serverPortValue = $isRange ? $serverPort : $serverPort . '-' . $serverPort;
     $serverPortArray = ['SERVER_PORT' => $serverPortValue];
-    $serverPortOffsetArray = [];
-//    if (isset($variables['SERVER_PORT_OFFSET'])) {
-//        unset($variables['SERVER_PORT_OFFSET']);
-//        if (!$isRange) {
-//            $offset = $serverPort + PetroXInstance::get()->server_port_offset;
-//            $serverPortOffsetArray = ['SERVER_PORT_OFFSET' => $offset . '-' . $offset];
-//        }
-//    }
-    $variables = array_merge($serverPortArray, $serverPortOffsetArray, $variables);
+    $variables = array_merge($serverPortArray, $variables);
     return petroXfindFreePortsForVariables($ips, $variables);
 }
 
 function petroXfindPorts($ports, $ips)
 {
-
     $_SERVER_IP = PetroXInstance::get()->server_ip;
     $_SERVER_PORT = PetroXInstance::get()->server_port;
     $variables = PetroXInstance::get()->variables;
-    //check if we need server port offset
-    //if so we add it here
 
-//    if (PetroXInstance::get()->server_port_offset > 0) {
-//        $offset = $_SERVER_PORT + PetroXInstance::get()->server_port_offset;
-//        $variables = array_merge(['SERVER_PORT_OFFSET' => $offset . '-' . $offset], $variables);
-//    }
-
-//    //first we are checking for possible ips for the given IP.
-//    $foundPorts = petroXfindFreePortsForAllVariablesOnIP($ips[$_SERVER_IP], $variables, $_SERVER_IP);
-//    //if we can't find that we are trying to find ip with the same port that is given by pterodactyl panel.
-//    if (!$foundPorts) {
-//        $foundPorts = petroXSetServerPortVariables($variables, $_SERVER_PORT, $ips);
-//    }
-
-
-    //if not we are trying to find any ip in the server port range.
-    $foundPorts = petroXSetServerPortVariables($variables, $ports['SERVER_PORT'], $ips, true);
-
+    $serverPort = $ports['SERVER_PORT'] ?? ($_SERVER_PORT . '-' . $_SERVER_PORT);
+    $foundPorts = petroXSetServerPortVariables($variables, $serverPort, $ips, true);
 
     PetroXInstance::get()->addFileLog([
         'foundedPorts' => json_encode($foundPorts),
@@ -717,7 +872,7 @@ function petroXfindPorts($ports, $ips)
         'server_port' => $_SERVER_PORT,
         'server_ip' => $_SERVER_IP,
         'server_ip_ports' => json_encode($ips[$_SERVER_IP] ?? [])
-    ], 'Founding ports finish');
+    ], 'Port discovery finished');
     return $foundPorts;
 }
 
@@ -730,8 +885,7 @@ function petroXGetCustomFieldId($params)
         ->first();
     if ($customFieldExists) {
         $customFieldId = $customFieldExists->id;
-    }
-    if (!$customFieldExists) {
+    } else {
         Capsule::table('tblcustomfields')->insert([
             'type' => 'product',
             'relid' => $params['packageid'],
@@ -771,41 +925,45 @@ function petroXreturnJsonMessage($message, $code = 200)
 
 function petroXSaveServerVariables($params, $serverData, $serverState)
 {
-
     global $_LANG;
 
-    if (!$params['allowSettingsEdit']) {
+    if (empty($params['allowSettingsEdit'])) {
         petroXReturnJson([
-            'message' => $_LANG['SERVER_SETTINGS_EDIT_NOT_ALLOWED']
+            'message' => $_LANG['SERVER_SETTINGS_EDIT_NOT_ALLOWED'] ?? 'Editing server settings is not allowed.'
         ], 400);
     }
 
     $serverId = $serverData['id'];
-    $environment = $serverData['container']['environment'];
+    $environment = $serverData['container']['environment'] ?? [];
     $data = array_merge($environment, $_POST);
 
+    $startup = $serverData['container']['startup_command'] ?? ($serverData['container']['environment']['STARTUP'] ?? '');
+    $image = $serverData['container']['image'] ?? '';
+
     $result = petroXApplicationApi($params, 'servers/' . $serverId . '/startup', [
-        'startup' => $serverData['container']['environment']['STARTUP'],
+        'startup' => $startup,
         'egg' => $serverData['egg'],
-        'image' => $serverData['container']['image'],
+        'image' => $image,
         'environment' => $data,
         'skip_scripts' => false,
     ], 'PATCH');
-    if ($result['status_code'] == 200) {
+
+    if ($result['status_code'] === 200) {
         petroXReturnJson([
-            'message' => $_LANG['changessavedsuccessfully']
+            'message' => $_LANG['changessavedsuccessfully'] ?? 'Changes saved successfully.'
         ], 200);
     }
 
     $errors = [
         'errors' => [],
-        'message' => $_LANG['genericerror']['title']
+        'message' => $_LANG['genericerror']['title'] ?? petroXFormatError($result, 'Failed to save server settings.')
     ];
     if (isset($result['errors'])) {
         foreach ($result['errors'] as $error) {
+            $sourceField = $error['meta']['source_field'] ?? ($error['source']['field'] ?? '');
             $errors['errors'][] = [
-                'input' => str_replace('environment.', '', $error['meta']['source_field']),
-                'message' => $error['detail']
+                'input' => str_replace('environment.', '', $sourceField),
+                'message' => $error['detail'] ?? 'Invalid value.'
             ];
         }
     }
@@ -814,11 +972,7 @@ function petroXSaveServerVariables($params, $serverData, $serverState)
 
 function petroXSaveServerStartup($params, $serverData, $serverState)
 {
-
 }
-
-
-
 
 function petroX_updateServerDomain($params)
 {
@@ -828,10 +982,13 @@ function petroX_updateServerDomain($params)
         if (PetroXInstance::get()->server_alias_ip !== false) {
             $serverIp = PetroXInstance::get()->server_alias_ip;
         }
-        Capsule::table('tblhosting')
-            ->where('id', $params['serviceid'])
-            ->where('userid', $params['userid'])
-            ->update(array('domain' => $serverIp . ":" . $serverPort));
+        $userId = $params['userid'] ?? ($params['clientsdetails']['userid'] ?? ($params['clientsdetails']['id'] ?? ($params['clientsdetails']['client_id'] ?? null)));
+        $query = Capsule::table('tblhosting')
+            ->where('id', $params['serviceid']);
+        if ($userId !== null) {
+            $query->where('userid', $userId);
+        }
+        $query->update(['domain' => $serverIp . ":" . $serverPort]);
     } catch (Exception $e) {
         return $e->getMessage() . "<br />" . $e->getTraceAsString();
     }
@@ -839,14 +996,15 @@ function petroX_updateServerDomain($params)
 
 function petroX_getServerIPAndPort($allocations, $allocation)
 {
-
+    if (!is_array($allocations)) return;
     foreach ($allocations as $allocationData) {
-        if ($allocationData['attributes']['id'] == $allocation) {
-            PetroXInstance::get()->server_ip = $allocationData['attributes']['ip'];
-            if (PetroXInstance::get()->use_alias_ip && $allocationData['attributes']['alias'] != '') {
-                PetroXInstance::get()->server_alias_ip = $allocationData['attributes']['alias'];
+        $attr = $allocationData['attributes'] ?? [];
+        if (($attr['id'] ?? null) == $allocation) {
+            PetroXInstance::get()->server_ip = $attr['ip'];
+            if (PetroXInstance::get()->use_alias_ip && !empty($attr['alias'])) {
+                PetroXInstance::get()->server_alias_ip = $attr['alias'];
             }
-            PetroXInstance::get()->server_port = $allocationData['attributes']['port'];
+            PetroXInstance::get()->server_port = (int)$attr['port'];
             break;
         }
     }
@@ -854,11 +1012,9 @@ function petroX_getServerIPAndPort($allocations, $allocation)
 
 function petrox_validateThreads($threads)
 {
-    //same validation from Pterodactyl panel
-    //app\Models\Server.php
     $pattern = '/^[0-9-,]+$/';
-    if (preg_match($pattern, $threads)) {
-        return $threads;
+    if (is_string($threads) && preg_match($pattern, trim($threads))) {
+        return trim($threads);
     }
     return null;
 }
@@ -874,35 +1030,39 @@ function petrox_validateThreads($threads)
  */
 function petroXFindTransferTarget($params, $locationId, $portsArray = [])
 {
-    $nodesResult = petroXApplicationApi($params, 'nodes?include=allocations');
+    $nodesResult = petroXApplicationApiPaginated($params, 'nodes?include=allocations');
     if ($nodesResult['status_code'] !== 200) {
-        throw new Exception('Failed to retrieve nodes for transfer, received error code: ' . $nodesResult['status_code'] . '. Enable module debug log for more info.');
+        throw new Exception('Failed to retrieve nodes for transfer: ' . petroXFormatError($nodesResult));
     }
 
     foreach ($nodesResult['data'] as $nodeData) {
         $node = $nodeData['attributes'];
 
-        // Only consider nodes in the target location
-        if ($node['location_id'] != $locationId) continue;
+        if (($node['location_id'] ?? null) != $locationId) continue;
 
-        $nodeAllocations = $node['relationships']['allocations']['data'];
+        $nodeAllocations = $node['relationships']['allocations']['data'] ?? [];
+        // If allocations relationship wasn't included, query allocations directly
+        if (empty($nodeAllocations)) {
+            $allocQuery = petroXApplicationApiPaginated($params, 'nodes/' . $node['id'] . '/allocations');
+            if ($allocQuery['status_code'] === 200) {
+                $nodeAllocations = $allocQuery['data'];
+            }
+        }
+
         $freeAllocations = [];
-
         foreach ($nodeAllocations as $allocation) {
             $attr = $allocation['attributes'];
-            if (!$attr['assigned']) {
+            if (empty($attr['assigned'])) {
                 $freeAllocations[] = $attr;
             }
         }
 
         if (empty($freeAllocations)) continue;
 
-        // Sort free allocations by port ascending
         usort($freeAllocations, function ($a, $b) {
             return $a['port'] <=> $b['port'];
         });
 
-        // If port ranges are configured, find a matching allocation
         if (!empty($portsArray) && isset($portsArray['SERVER_PORT'])) {
             $range = $portsArray['SERVER_PORT'];
             if (str_contains($range, '-')) {
@@ -922,7 +1082,6 @@ function petroXFindTransferTarget($params, $locationId, $portsArray = [])
                 }
             }
         } else {
-            // No port range requirements — use first free allocation
             return [
                 'node_id' => $node['id'],
                 'allocation_id' => $freeAllocations[0]['id'],
