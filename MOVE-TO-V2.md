@@ -355,8 +355,14 @@ Test 12: Server lifecycle operations (suspend, unsuspend, reinstall, etc) PASS
 Test 13: Idempotent service retry without creating duplicate servers      PASS
 Test 14: Network timeouts, malformed JSON, and server-side 5xx errors     PASS
 Test 15: Backward compatibility with existing configuration & v1/v2       PASS
+Test 16: Password change via petrox_ChangePassword (PATCH users/{id})     PASS
+Test 17: Server reinstallation and admin custom buttons                   PASS
+Test 18: Multi-port allocation build patch deduplication & safety        PASS
+Test 19: Port range calculations, thread core 0, & multi-homed affinity   PASS
+Test 20: Universal Fractal relationships extraction (root vs attributes)  PASS
+Test 21: WHMCS Hook safety on 404 client edit and missing server config   PASS
 ================================================================================
-Total Passed: 15 / 15 (100% Pass Rate, 0 Failed, 0 Warnings)
+Total Passed: 21 / 21 (100% Pass Rate, 0 Failed, 0 Warnings)
 ================================================================================
 ```
 

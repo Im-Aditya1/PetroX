@@ -205,8 +205,19 @@ namespace {
         return str_replace('encrypted_', '', $ciphertext);
     }
 
-    // Include PetroX module
+    // Mock WHMCS add_hook
+    global $mockHooks;
+    $mockHooks = [];
+    if (!function_exists('add_hook')) {
+        function add_hook(string $hookName, int $priority, callable $fn) {
+            global $mockHooks;
+            $mockHooks[$hookName][] = $fn;
+        }
+    }
+
+    // Include PetroX module & hooks
     require_once __DIR__ . '/../modules/servers/petrox/petrox.php';
+    require_once __DIR__ . '/../modules/servers/petrox/hooks.php';
 
     // Test Harness
     class TestRunner
@@ -840,6 +851,275 @@ namespace {
         if (!in_array('location_id', $keys, true) || !in_array('egg_id', $keys, true) || !in_array('ports_ranges', $keys, true)) {
             throw new Exception("Missing essential configuration keys!");
         }
+    });
+
+    // ── Test 16: Password Change via Application API ──
+    $runner->runTest(16, "Password change via petrox_ChangePassword (PATCH /api/application/users/{id})", function () {
+        $passwordUpdated = false;
+        PetroXInstance::$mockApiHandler = function ($method, $url, $data, $headers) use (&$passwordUpdated) {
+            if (str_contains($url, 'users/external/5')) {
+                return [
+                    'status_code' => 200,
+                    'attributes' => [
+                        'id' => 99,
+                        'username' => 'testuser',
+                        'email' => 'client@example.com',
+                        'first_name' => 'John',
+                        'last_name' => 'Doe',
+                    ]
+                ];
+            }
+            if ($method === 'PATCH' && str_contains($url, 'users/99')) {
+                if (isset($data['password']) && $data['password'] === 'NewSecurePass123!') {
+                    $passwordUpdated = true;
+                    return ['status_code' => 200];
+                }
+            }
+            return ['status_code' => 200];
+        };
+
+        $params = getBaseParams();
+        $params['password'] = 'NewSecurePass123!';
+        $res = petrox_ChangePassword($params);
+        if ($res !== 'success') {
+            throw new Exception("Change password failed: " . $res);
+        }
+        if (!$passwordUpdated) {
+            throw new Exception("Password was not sent in PATCH payload to Pterodactyl API!");
+        }
+    });
+
+    // ── Test 17: Server Reinstallation and Admin Buttons ──
+    $runner->runTest(17, "Server reinstallation and admin custom buttons (POST /api/application/servers/{id}/reinstall)", function () {
+        $buttons = petrox_AdminCustomButtonArray();
+        if (($buttons['Reinstall Server'] ?? '') !== 'reinstallServer') {
+            throw new Exception("Expected 'Reinstall Server' => 'reinstallServer' in petrox_AdminCustomButtonArray, got: " . json_encode($buttons));
+        }
+
+        $reinstallCalled = false;
+        PetroXInstance::$mockApiHandler = function ($method, $url, $data, $headers) use (&$reinstallCalled) {
+            if (str_contains($url, 'servers/external/10')) {
+                return ['status_code' => 200, 'attributes' => ['id' => 77, 'uuid' => 'uuid-77']];
+            }
+            if ($method === 'POST' && str_contains($url, 'servers/77/reinstall')) {
+                $reinstallCalled = true;
+                return ['status_code' => 204];
+            }
+            return ['status_code' => 200];
+        };
+
+        $params = getBaseParams();
+        $res = petrox_reinstallServer($params);
+        if ($res !== 'success') {
+            throw new Exception("Reinstall server failed: " . $res);
+        }
+        if (!$reinstallCalled) {
+            throw new Exception("Reinstall API endpoint was not called!");
+        }
+    });
+
+    // ── Test 18: Multi-port allocation build patch deduplication ──
+    $runner->runTest(18, "Multi-port allocation build patch deduplication and primary protection", function () {
+        $buildPayload = null;
+        PetroXInstance::$mockApiHandler = function ($method, $url, $data, $headers) use (&$buildPayload) {
+            if (str_contains($url, 'servers/external/10')) return ['status_code' => 404];
+            if (str_contains($url, 'users/external/5')) return ['status_code' => 200, 'attributes' => ['id' => 1]];
+            if (str_contains($url, 'eggs/1?include=variables,tags')) {
+                return [
+                    'status_code' => 200,
+                    'attributes' => [
+                        'id' => 1, 'docker_image' => 'img', 'startup' => 'cmd',
+                        'relationships' => [
+                            'variables' => [
+                                'data' => [
+                                    ['attributes' => ['env_variable' => 'SERVER_PORT', 'default_value' => '25565', 'name' => 'Port']],
+                                    ['attributes' => ['env_variable' => 'QUERY_PORT', 'default_value' => '25566', 'name' => 'Query Port']],
+                                ]
+                            ]
+                        ]
+                    ]
+                ];
+            }
+            if ($method === 'POST' && str_contains($url, 'servers?include=allocations')) {
+                return [
+                    'status_code' => 201,
+                    'attributes' => [
+                        'id' => 20, 'uuid' => 'uuid-20', 'node' => 2, 'allocation' => 101,
+                        'relationships' => ['allocations' => ['data' => [['attributes' => ['id' => 101, 'ip' => '10.0.0.1', 'port' => 25565, 'alias' => '']]]]]
+                    ]
+                ];
+            }
+            if (str_contains($url, 'nodes/2/allocations')) {
+                return [
+                    'status_code' => 200,
+                    'data' => [
+                        ['attributes' => ['id' => 101, 'ip' => '10.0.0.1', 'port' => 25565, 'assigned' => true]],
+                        ['attributes' => ['id' => 102, 'ip' => '10.0.0.1', 'port' => 25566, 'assigned' => false]],
+                    ]
+                ];
+            }
+            if ($method === 'PATCH' && str_contains($url, 'servers/20/build')) {
+                $buildPayload = $data;
+                return [
+                    'status_code' => 200,
+                    'attributes' => [
+                        'allocation' => 101,
+                        'relationships' => ['allocations' => ['data' => [['attributes' => ['id' => 101, 'ip' => '10.0.0.1', 'port' => 25565, 'alias' => '']]]]]
+                    ]
+                ];
+            }
+            return ['status_code' => 200];
+        };
+
+        $params = getBaseParams();
+        $params['configoptions']['ports_ranges'] = json_encode([
+            'SERVER_PORT' => '25565-25565',
+            'QUERY_PORT' => '25566-25566',
+        ]);
+        $res = petrox_CreateAccount($params);
+        if ($res !== 'success') {
+            throw new Exception("Provisioning failed: " . $res);
+        }
+
+        // Primary allocation 101 MUST NOT be in add_allocations
+        if (isset($buildPayload['add_allocations']) && in_array(101, $buildPayload['add_allocations'], true)) {
+            throw new Exception("Primary allocation 101 erroneously present in add_allocations!");
+        }
+        // Primary allocation 101 MUST NOT be in remove_allocations
+        if (isset($buildPayload['remove_allocations']) && in_array(101, $buildPayload['remove_allocations'], true)) {
+            throw new Exception("Primary allocation 101 erroneously present in remove_allocations!");
+        }
+        // Secondary port 102 MUST be in add_allocations
+        if (!isset($buildPayload['add_allocations']) || !in_array(102, $buildPayload['add_allocations'], true)) {
+            throw new Exception("Secondary allocation 102 missing from add_allocations!");
+        }
+    });
+
+    // ── Test 19: Calculation robustness, Thread Core 0, and IP Affinity ──
+    $runner->runTest(19, "Port range calculations, thread core 0, and multi-homed IP affinity", function () {
+        // 19a. Single port calculation without hyphen
+        $range = petroX_calculatePortRange('7777', 10);
+        if ($range !== '7787-7787') {
+            throw new Exception("Expected '7787-7787', got: " . $range);
+        }
+
+        // 19b. Hyphenated range calculation
+        $range2 = petroX_calculatePortRange('7777-7780', 5);
+        if ($range2 !== '7782-7785') {
+            throw new Exception("Expected '7782-7785', got: " . $range2);
+        }
+
+        // 19c. Thread core 0 validation
+        $t0 = petrox_validateThreads(0);
+        if ($t0 !== '0') {
+            throw new Exception("Expected '0' for int 0, got: " . var_export($t0, true));
+        }
+        $t0str = petrox_validateThreads('0');
+        if ($t0str !== '0') {
+            throw new Exception("Expected '0' for string '0', got: " . var_export($t0str, true));
+        }
+        $tMulti = petrox_validateThreads('0,1,2');
+        if ($tMulti !== '0,1,2') {
+            throw new Exception("Expected '0,1,2', got: " . var_export($tMulti, true));
+        }
+
+        // 19d. Multi-homed IP affinity: server_ip should be prioritized
+        PetroXInstance::get()->server_ip = '10.0.0.2';
+        PetroXInstance::get()->server_port = 25565;
+        PetroXInstance::get()->variables = ['QUERY_PORT' => '25566-25566'];
+        $ips = [
+            '10.0.0.1' => [
+                ['port' => 25565, 'id' => 200, 'assigned' => 0],
+                ['port' => 25566, 'id' => 201, 'assigned' => 0],
+            ],
+            '10.0.0.2' => [
+                ['port' => 25565, 'id' => 203, 'assigned' => 1], // server's own primary
+                ['port' => 25566, 'id' => 202, 'assigned' => 0], // candidate query port
+            ],
+        ];
+        $found = petroXfindPorts(['SERVER_PORT' => '25565-25565', 'QUERY_PORT' => '25566-25566'], $ips);
+        if (!isset($found['QUERY_PORT']) || $found['QUERY_PORT']['ip'] !== '10.0.0.2') {
+            throw new Exception("IP affinity failed: expected query port on 10.0.0.2, got: " . json_encode($found));
+        }
+    });
+
+    // ── Test 20: Universal Fractal relationship extraction (root vs attributes) ──
+    $runner->runTest(20, "Universal Fractal relationships extraction (root vs attributes)", function () {
+        // Response with relationships at root (standard Fractal Item serializer)
+        $rootEggData = [
+            'status_code' => 200,
+            'object' => 'egg',
+            'attributes' => ['id' => 5, 'name' => 'Test Root Egg', 'docker_image' => 'img'],
+            'relationships' => [
+                'variables' => [
+                    'data' => [
+                        ['attributes' => ['env_variable' => 'SERVER_PORT', 'default_value' => '25565', 'name' => 'Port']]
+                    ]
+                ],
+                'tags' => [
+                    'data' => [
+                        ['attributes' => ['name' => 'Minecraft', 'slug' => 'minecraft']]
+                    ]
+                ]
+            ]
+        ];
+
+        petroXProcessAllocations($rootEggData, ['SERVER_PORT' => '25565-25565']);
+        $vars = PetroXInstance::get()->variables;
+        if (!isset($vars['SERVER_PORT'])) {
+            throw new Exception("Failed to extract variables from root relationships!");
+        }
+
+        // Response with relationships inside attributes (nested serializer)
+        $nestedEggData = [
+            'status_code' => 200,
+            'object' => 'egg',
+            'attributes' => [
+                'id' => 6, 'name' => 'Test Nested Egg', 'docker_image' => 'img',
+                'relationships' => [
+                    'variables' => [
+                        'data' => [
+                            ['attributes' => ['env_variable' => 'SERVER_PORT', 'default_value' => '25565', 'name' => 'Port']]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+
+        petroXProcessAllocations($nestedEggData, ['SERVER_PORT' => '25565-25565']);
+        $vars2 = PetroXInstance::get()->variables;
+        if (!isset($vars2['SERVER_PORT'])) {
+            throw new Exception("Failed to extract variables from nested attributes relationships!");
+        }
+    });
+
+    // ── Test 21: WHMCS Hook Safety and 404 Isolation ──
+    $runner->runTest(21, "WHMCS Hook safety on 404 client edit and missing server configuration", function () {
+        global $mockHooks;
+        if (empty($mockHooks['ClientEdit'])) {
+            throw new Exception("ClientEdit hook is not registered!");
+        }
+
+        PetroXInstance::get()->enable_whmcs_user_sync = true;
+
+        PetroXInstance::$mockApiHandler = function () {
+            return ['status_code' => 404];
+        };
+
+        $clientEditHook = $mockHooks['ClientEdit'][0];
+        // Executing hook when client has no panel account must NOT throw an exception
+        $clientEditHook([
+            'userid' => 999,
+            'email' => 'unknown@example.com',
+            'firstname' => 'Ghost',
+            'lastname' => 'User',
+            'olddata' => [
+                'client_id' => 999,
+                'email' => 'old@example.com',
+                'firstname' => 'Ghost',
+                'lastname' => 'User',
+            ]
+        ]);
     });
 
     exit($runner->report());

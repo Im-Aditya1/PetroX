@@ -62,8 +62,9 @@ function petrox_loadEggs($params)
             foreach ($res['data'] as $egg) {
                 $attr = $egg['attributes'];
                 $tags = [];
-                if (!empty($egg['relationships']['tags']['data'])) {
-                    foreach ($egg['relationships']['tags']['data'] as $tag) {
+                $tagData = $egg['relationships']['tags']['data'] ?? ($egg['attributes']['relationships']['tags']['data'] ?? []);
+                if (!empty($tagData)) {
+                    foreach ($tagData as $tag) {
                         $tags[] = $tag['attributes']['name'] ?? ($tag['attributes']['slug'] ?? '');
                     }
                 }
@@ -76,20 +77,33 @@ function petrox_loadEggs($params)
         // Fallback to legacy v1 nests
     }
 
-    // Legacy v1 fallback using $_SESSION['nests']
-    if (isset($_SESSION['nests'])) {
-        $nests = $_SESSION['nests'];
-        foreach ($nests as $nest) {
-            $attr = $nest['attributes'];
-            $nestId = $attr['id'];
-            if (!empty($attr['relationships']['eggs']['data'])) {
-                foreach ($attr['relationships']['eggs']['data'] as $egg) {
-                    $eggAttr = $egg['attributes'];
-                    $eggs[$eggAttr['id']] = $eggAttr['name'] . ' (' . $nestId . ')';
+    // Legacy v1 fallback using $_SESSION['nests'] or direct API query
+    try {
+        if (!isset($_SESSION['nests'])) {
+            $data = petroXApplicationApi($params, 'nests?include=eggs');
+            if ($data['status_code'] === 200 && !empty($data['data'])) {
+                $_SESSION['nests'] = $data['data'];
+            }
+        }
+
+        if (isset($_SESSION['nests'])) {
+            $nests = $_SESSION['nests'];
+            foreach ($nests as $nest) {
+                $attr = $nest['attributes'];
+                $nestId = $attr['id'];
+                $eggsData = $attr['relationships']['eggs']['data'] ?? ($nest['relationships']['eggs']['data'] ?? []);
+                if (!empty($eggsData)) {
+                    foreach ($eggsData as $egg) {
+                        $eggAttr = $egg['attributes'];
+                        $eggs[$eggAttr['id']] = $eggAttr['name'] . ' (' . $nestId . ')';
+                    }
                 }
             }
         }
+    } catch (Throwable $e) {
+        // Return whatever was loaded
     }
+
     return $eggs;
 }
 
@@ -99,7 +113,7 @@ function petrox_loadNests($params)
     try {
         // Try v1 nests first
         $data = petroXApplicationApi($params, 'nests?include=eggs');
-        if ($data['status_code'] == 200 && !empty($data['data'])) {
+        if ($data['status_code'] === 200 && !empty($data['data'])) {
             $nests = $data['data'];
             foreach ($nests as $nest) {
                 $attr = $nest['attributes'];
@@ -112,20 +126,8 @@ function petrox_loadNests($params)
         // Fall through
     }
 
-    // In Pterodactyl v2, nests are removed and replaced by tags
-    try {
-        $tagsData = petroXApplicationApiPaginated($params, 'tags');
-        if ($tagsData['status_code'] === 200 && !empty($tagsData['data'])) {
-            foreach ($tagsData['data'] as $tag) {
-                $attr = $tag['attributes'];
-                $list[$attr['id']] = 'Tag: ' . $attr['name'];
-            }
-            return $list;
-        }
-    } catch (Throwable $e) {
-        // Fall through
-    }
-
+    // In Pterodactyl v2, nests are removed. Tags are assigned directly to eggs.
+    // We intentionally do NOT populate tag IDs as nest IDs to prevent sending tag IDs as nest IDs.
     $list[0] = 'None / Optional (Pterodactyl v2 uses Tags)';
     return $list;
 }
@@ -522,7 +524,7 @@ function petrox_CreateAccount(array $params)
         $default_variables = petroXGetOption($params, 'default_variables');
         $default_variables = json_decode($default_variables ?? '', true) ?: [];
 
-        $eggVariables = $eggData['attributes']['relationships']['variables']['data'] ?? [];
+        $eggVariables = $eggData['relationships']['variables']['data'] ?? ($eggData['attributes']['relationships']['variables']['data'] ?? []);
         foreach ($eggVariables as $val) {
             $attr = $val['attributes'];
             $var = $attr['env_variable'];
@@ -591,7 +593,7 @@ function petrox_CreateAccount(array $params)
         $oom_disabled = (bool)petroXGetOption($params, 'oom_disabled');
 
         $threadsRaw = petroXGetOption($params, 'threads');
-        $threads = !empty($threadsRaw) ? petrox_validateThreads($threadsRaw) : null;
+        $threads = ($threadsRaw !== '' && $threadsRaw !== null) ? petrox_validateThreads($threadsRaw) : null;
 
         $serverData = [
             'name' => $name,
@@ -648,11 +650,12 @@ function petrox_CreateAccount(array $params)
         $serverId = $server['attributes']['id'];
         $_SERVER_ID = $server['attributes']['uuid'];
 
-        $serverAllocations = $server['attributes']['relationships']['allocations']['data'] ?? [];
+        $serverAllocations = $server['relationships']['allocations']['data'] ?? ($server['attributes']['relationships']['allocations']['data'] ?? []);
         if (empty($serverAllocations)) {
             $fetchServer = petroXApplicationApi($params, 'servers/' . $serverId . '?include=allocations');
-            if ($fetchServer['status_code'] === 200 && !empty($fetchServer['attributes']['relationships']['allocations']['data'])) {
-                $serverAllocations = $fetchServer['attributes']['relationships']['allocations']['data'];
+            $allocData = $fetchServer['relationships']['allocations']['data'] ?? ($fetchServer['attributes']['relationships']['allocations']['data'] ?? []);
+            if ($fetchServer['status_code'] === 200 && !empty($allocData)) {
+                $serverAllocations = $allocData;
             }
         }
         $allocation = $server['attributes']['allocation'];
@@ -688,21 +691,28 @@ function petrox_CreateAccount(array $params)
 
         if ($foundPorts) {
             petroXLog('Found ports', 'Found ports.', $foundPorts);
-            $_SERVER_PORT_ID = $serverAllocations[0]['attributes']['id'] ?? $allocation;
+            $_SERVER_PORT_ID = (int)($serverAllocations[0]['attributes']['id'] ?? $allocation);
 
-            $allocationArray = [];
-            $allocationArray['allocation'] = $_SERVER_PORT_ID;
+            $primaryAllocationId = $_SERVER_PORT_ID;
+            $removeAllocations = [];
+
             if (isset($foundPorts['SERVER_PORT'])) {
-                $allocationArray['allocation'] = (int)$foundPorts['SERVER_PORT']['id'];
-                $allocationArray['remove_allocations'] = [(int)$_SERVER_PORT_ID];
+                $candidatePrimary = (int)$foundPorts['SERVER_PORT']['id'];
+                if ($candidatePrimary !== $_SERVER_PORT_ID) {
+                    $primaryAllocationId = $candidatePrimary;
+                    $removeAllocations[] = $_SERVER_PORT_ID;
+                }
             }
 
             $portEnv = [];
             $additional = [];
             foreach ($foundPorts as $key => $var) {
                 $portEnv[$key] = (string)$var['port'];
-                $additional[] = (int)$var['id'];
-                $maximumAllocations++;
+                $portAllocId = (int)$var['id'];
+                if ($portAllocId !== $primaryAllocationId) {
+                    $additional[] = $portAllocId;
+                    $maximumAllocations++;
+                }
             }
 
             if (PetroXInstance::get()->getDynamicEnvironmentArray()) {
@@ -716,7 +726,16 @@ function petrox_CreateAccount(array $params)
             if (isset($portEnv['SERVER_PORT'])) {
                 unset($portEnv['SERVER_PORT']);
             }
-            $allocationArray['add_allocations'] = $additional;
+
+            $allocationArray = [
+                'allocation' => $primaryAllocationId,
+            ];
+            if (!empty($additional)) {
+                $allocationArray['add_allocations'] = $additional;
+            }
+            if (!empty($removeAllocations)) {
+                $allocationArray['remove_allocations'] = $removeAllocations;
+            }
 
             $newServerArray = array_merge([
                 'allocation' => $allocationArray['allocation'],
@@ -744,7 +763,7 @@ function petrox_CreateAccount(array $params)
             }
 
             $allocation = $updateResult['attributes']['allocation'];
-            $serverAllocations = $updateResult['attributes']['relationships']['allocations']['data'] ?? [];
+            $serverAllocations = $updateResult['relationships']['allocations']['data'] ?? ($updateResult['attributes']['relationships']['allocations']['data'] ?? []);
             petroX_getServerIPAndPort($serverAllocations, $allocation);
 
             $startupCommand = $server['attributes']['container']['startup_command'] ?? ($server['attributes']['container']['environment']['STARTUP'] ?? $startup);
@@ -844,6 +863,60 @@ function petrox_TerminateAccount(array $params)
     return 'success';
 }
 
+function petrox_reinstallServer(array $params)
+{
+    if (!empty($params['addonId']) && $params['addonId'] > 0) {
+        $params['serviceid'] = $params['serviceid'] . '.' . $params['addonId'];
+    }
+
+    try {
+        $serverId = petroXGetServer($params);
+        if (!$serverId) {
+            throw new Exception('Failed to reinstall server because it does not exist on the panel.');
+        }
+
+        $reinstallResult = petroXApplicationApi($params, 'servers/' . $serverId . '/reinstall', [], 'POST');
+        if ($reinstallResult['status_code'] !== 204 && $reinstallResult['status_code'] !== 200) {
+            throw new Exception('Failed to reinstall the server: ' . petroXFormatError($reinstallResult));
+        }
+    } catch (Exception $err) {
+        if (function_exists('logModuleCall')) {
+            logModuleCall("PetroX-WHMCS", 'REINSTALL SERVER', petroXSanitizeForLog($params), $err->getMessage(), $err->getTraceAsString());
+        }
+        return $err->getMessage();
+    }
+
+    return 'success';
+}
+
+function petrox_ChangePassword(array $params)
+{
+    try {
+        if (empty($params['password'])) {
+            return 'Password cannot be empty.';
+        }
+
+        $userResult = PetroXInstance::get()->getPterodactylUser($params, [
+            'id' => $params['clientsdetails']['client_id'] ?? ($params['clientsdetails']['id'] ?? ($params['userid'] ?? '')),
+            'email' => $params['clientsdetails']['email'] ?? '',
+            'firstname' => $params['clientsdetails']['firstname'] ?? '',
+            'lastname' => $params['clientsdetails']['lastname'] ?? '',
+        ], false);
+
+        if ($userResult['status_code'] !== 200 || empty($userResult['attributes']['id'])) {
+            return 'Failed to find associated Pterodactyl user account to change password.';
+        }
+
+        PetroXInstance::get()->changePterodactylPassword($userResult, $params, $params['password']);
+        return 'success';
+    } catch (Exception $e) {
+        if (function_exists('logModuleCall')) {
+            logModuleCall("PetroX-WHMCS", 'CHANGE PASSWORD', petroXSanitizeForLog($params), $e->getMessage(), $e->getTraceAsString());
+        }
+        return $e->getMessage();
+    }
+}
+
 function petrox_ChangePackage(array $params)
 {
     if (!empty($params['addonId']) && $params['addonId'] > 0) {
@@ -874,7 +947,7 @@ function petrox_ChangePackage(array $params)
         $oom_disabled = (bool)petroXGetOption($params, 'oom_disabled');
 
         $threadsRaw = petroXGetOption($params, 'threads');
-        $threads = !empty($threadsRaw) ? petrox_validateThreads($threadsRaw) : null;
+        $threads = ($threadsRaw !== '' && $threadsRaw !== null) ? petrox_validateThreads($threadsRaw) : null;
 
         // ── Step 1: Update build configuration (resources) ──
         $updateData = [
@@ -904,7 +977,7 @@ function petrox_ChangePackage(array $params)
             throw new Exception('Failed to update server build: ' . petroXFormatError($updateResult));
         }
         $allocation = $updateResult['attributes']['allocation'];
-        $serverAllocations = $updateResult['attributes']['relationships']['allocations']['data'] ?? [];
+        $serverAllocations = $updateResult['relationships']['allocations']['data'] ?? ($updateResult['attributes']['relationships']['allocations']['data'] ?? []);
 
         petroX_getServerIPAndPort($serverAllocations, $allocation);
 
@@ -923,7 +996,7 @@ function petrox_ChangePackage(array $params)
         $default_variables = petroXGetOption($params, 'default_variables');
         $default_variables = json_decode($default_variables ?? '', true) ?: [];
         $environment = [];
-        $eggVariables = $eggData['attributes']['relationships']['variables']['data'] ?? [];
+        $eggVariables = $eggData['relationships']['variables']['data'] ?? ($eggData['attributes']['relationships']['variables']['data'] ?? []);
         foreach ($eggVariables as $val) {
             $attr = $val['attributes'];
             $var = $attr['env_variable'];
@@ -1017,6 +1090,9 @@ function petrox_ChangePackage(array $params)
 
 function petrox_AdminCustomButtonArray()
 {
+    return [
+        "Reinstall Server" => "reinstallServer",
+    ];
 }
 
 function petrox_LoginLink(array $params)

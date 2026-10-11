@@ -55,6 +55,9 @@ add_hook('ClientAreaHeadOutput', 1, function ($params) {
 
 add_hook('ClientAdd', 1, function ($vars) {
     if (PetroXInstance::get()->enable_whmcs_user_sync !== true) return;
+    $params = PetroXInstance::get()->getServer();
+    if (!$params) return;
+
     $data = PetroXInstance::get()->hooksData['UserAdd'] ?? [];
     $arr = [
         'username' => petroXGenerateUsername(),
@@ -63,70 +66,92 @@ add_hook('ClientAdd', 1, function ($vars) {
         'lastname' => $vars['lastname'],
         'email' => $vars['email'],
     ];
-    if ($data) {
+    if (!empty($data['password'])) {
         $arr['password'] = $data['password'];
     }
-    $params = PetroXInstance::get()->getServer();
-    $userResult = PetroXInstance::get()->getPterodactylUser($params, $arr);
-    if ($userResult['status_code'] !== 200 && $userResult['status_code'] !== 201) {
-        throw new Exception('Failed to create user, received error code: ' . $userResult['status_code'] . '. Enable module debug log for more info.');
+
+    try {
+        $userResult = PetroXInstance::get()->getPterodactylUser($params, $arr);
+        if ($userResult['status_code'] !== 200 && $userResult['status_code'] !== 201) {
+            if (function_exists('logModuleCall')) {
+                logModuleCall("PetroX-WHMCS", 'HOOK ClientAdd', petroXSanitizeForLog($arr), 'Failed to create user on panel: ' . ($userResult['status_code'] ?? 'unknown'), '');
+            }
+        }
+    } catch (Throwable $e) {
+        if (function_exists('logModuleCall')) {
+            logModuleCall("PetroX-WHMCS", 'HOOK ClientAdd', petroXSanitizeForLog($arr), $e->getMessage(), $e->getTraceAsString());
+        }
     }
 });
 
 add_hook('ClientEdit', 1, function ($client) {
-
     if (PetroXInstance::get()->enable_whmcs_user_sync !== true) return;
-
-    $oldClient['id'] = $client['olddata']['client_id'];
-    $oldClient['email'] = $client['olddata']['email'];
-    $oldClient['firstname'] = $client['olddata']['firstname'];
-    $oldClient['lastname'] = $client['olddata']['lastname'];
-
-    //just to be save let's add random username
-    //in case the user does not exist and need to be created new one.
-    $oldClient['username'] = petroXGenerateUsername();
-
     $params = PetroXInstance::get()->getServer();
-    $userResult = PetroXInstance::get()->getPterodactylUser($params, $oldClient, false);
+    if (!$params) return;
 
-    if ($userResult['status_code'] !== 404) {
-        $newData = [
-            'username' => $userResult['attributes']['username'],
-            'email' => $client['email'],
-            'first_name' => $client['firstname'],
-            'last_name' => $client['lastname'],
-        ];
-        PetroXInstance::get()->updatePterodactylUserData($userResult, $params, $newData);
-    }
-    if ($userResult['status_code'] === 404) {
-        throw new Exception('Failed to edit user, received error code: ' . $userResult['status_code'] . '. Enable module debug log for more info.');
-    }
+    $oldClient = [
+        'id' => $client['olddata']['client_id'] ?? ($client['olddata']['id'] ?? ($client['userid'] ?? '')),
+        'email' => $client['olddata']['email'] ?? '',
+        'firstname' => $client['olddata']['firstname'] ?? '',
+        'lastname' => $client['olddata']['lastname'] ?? '',
+        'username' => petroXGenerateUsername(),
+    ];
 
+    try {
+        $userResult = PetroXInstance::get()->getPterodactylUser($params, $oldClient, false);
+
+        if (($userResult['status_code'] ?? 0) === 200 && !empty($userResult['attributes']['id'])) {
+            $newData = [
+                'username' => $userResult['attributes']['username'],
+                'email' => $client['email'],
+                'first_name' => $client['firstname'],
+                'last_name' => $client['lastname'],
+            ];
+            PetroXInstance::get()->updatePterodactylUserData($userResult, $params, $newData);
+        }
+        // If status_code is 404, client does not have a Pterodactyl account; ignore safely.
+    } catch (Throwable $e) {
+        if (function_exists('logModuleCall')) {
+            logModuleCall("PetroX-WHMCS", 'HOOK ClientEdit', petroXSanitizeForLog($client), $e->getMessage(), $e->getTraceAsString());
+        }
+    }
 });
 
 add_hook('PreDeleteClient', 1, function ($vars) {
     if (PetroXInstance::get()->enable_whmcs_user_sync !== true) return;
-    $clientId = $vars['userid'];
     $params = PetroXInstance::get()->getServer();
-    $userResult = PetroXInstance::get()->getPterodactylUser($params, [
-        'id' => $clientId
-    ], false);
+    if (!$params) return;
 
-    if ($userResult !== 404) {
-        //petroXApplicationApi($params, 'users/' . $userResult['attributes']['id'], [], 'DELETE');
+    $clientId = $vars['userid'];
+    try {
+        $userResult = PetroXInstance::get()->getPterodactylUser($params, [
+            'id' => $clientId
+        ], false);
+
+        if (($userResult['status_code'] ?? 0) === 200 && !empty($userResult['attributes']['id'])) {
+            //petroXApplicationApi($params, 'users/' . $userResult['attributes']['id'], [], 'DELETE');
+        }
+    } catch (Throwable $e) {
+        // Suppress hook error
     }
 });
 
 add_hook('ClientClose', 1, function ($vars) {
     if (PetroXInstance::get()->enable_whmcs_user_sync !== true) return;
-    $clientId = $vars['userid'];
     $params = PetroXInstance::get()->getServer();
-    $userResult = PetroXInstance::get()->getPterodactylUser($params, [
-        'id' => $clientId
-    ], false);
+    if (!$params) return;
 
-    if ($userResult !== 404) {
-        //   petroXApplicationApi($params, 'users/' . $userResult['attributes']['id'], [], 'DELETE');
+    $clientId = $vars['userid'];
+    try {
+        $userResult = PetroXInstance::get()->getPterodactylUser($params, [
+            'id' => $clientId
+        ], false);
+
+        if (($userResult['status_code'] ?? 0) === 200 && !empty($userResult['attributes']['id'])) {
+            //petroXApplicationApi($params, 'users/' . $userResult['attributes']['id'], [], 'DELETE');
+        }
+    } catch (Throwable $e) {
+        // Suppress hook error
     }
 });
 

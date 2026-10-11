@@ -665,7 +665,7 @@ function petroXGetNodeAllocations($params, $serverNode)
                 $nodeCandidate = $nodeData['attributes'];
                 if ($nodeCandidate['id'] == $serverNode) {
                     $node = $nodeCandidate;
-                    $allocations = $nodeCandidate['relationships']['allocations']['data'] ?? [];
+                    $allocations = $nodeCandidate['relationships']['allocations']['data'] ?? ($nodeCandidate['attributes']['relationships']['allocations']['data'] ?? ($nodeData['relationships']['allocations']['data'] ?? []));
                     break;
                 }
             }
@@ -683,9 +683,11 @@ function petroXGetNodeAllocations($params, $serverNode)
 
 function petroX_calculatePortRange($serverPortRange, $offset)
 {
-    [$start, $end] = explode('-', $serverPortRange);
-    $newStart = ($start + $offset);
-    $newEnd = $end + $offset;
+    $parts = explode('-', (string)$serverPortRange);
+    $start = (int)$parts[0];
+    $end = isset($parts[1]) ? (int)$parts[1] : $start;
+    $newStart = $start + (int)$offset;
+    $newEnd = $end + (int)$offset;
     return $newStart . '-' . $newEnd;
 }
 
@@ -733,7 +735,7 @@ function petroXMakeIParray()
 function petroXProcessAllocations($eggData, $ports)
 {
     $variables = [];
-    $varData = $eggData['attributes']['relationships']['variables']['data'] ?? [];
+    $varData = $eggData['relationships']['variables']['data'] ?? ($eggData['attributes']['relationships']['variables']['data'] ?? []);
     foreach ($varData as $val) {
         $attr = $val['attributes'];
         $var = $attr['env_variable'];
@@ -860,6 +862,17 @@ function petroXfindPorts($ports, $ips)
     $_SERVER_IP = PetroXInstance::get()->server_ip;
     $_SERVER_PORT = PetroXInstance::get()->server_port;
     $variables = PetroXInstance::get()->variables;
+
+    // Prioritize server IP in multi-homed nodes to maintain IP affinity
+    if ($_SERVER_IP && isset($ips[$_SERVER_IP])) {
+        $orderedIps = [$_SERVER_IP => $ips[$_SERVER_IP]];
+        foreach ($ips as $ip => $portsList) {
+            if ($ip !== $_SERVER_IP) {
+                $orderedIps[$ip] = $portsList;
+            }
+        }
+        $ips = $orderedIps;
+    }
 
     $serverPort = $ports['SERVER_PORT'] ?? ($_SERVER_PORT . '-' . $_SERVER_PORT);
     $foundPorts = petroXSetServerPortVariables($variables, $serverPort, $ips, true);
@@ -1012,6 +1025,9 @@ function petroX_getServerIPAndPort($allocations, $allocation)
 
 function petrox_validateThreads($threads)
 {
+    if (is_int($threads)) {
+        return (string)$threads;
+    }
     $pattern = '/^[0-9-,]+$/';
     if (is_string($threads) && preg_match($pattern, trim($threads))) {
         return trim($threads);
@@ -1040,7 +1056,7 @@ function petroXFindTransferTarget($params, $locationId, $portsArray = [])
 
         if (($node['location_id'] ?? null) != $locationId) continue;
 
-        $nodeAllocations = $node['relationships']['allocations']['data'] ?? [];
+        $nodeAllocations = $nodeData['relationships']['allocations']['data'] ?? ($node['relationships']['allocations']['data'] ?? ($node['attributes']['relationships']['allocations']['data'] ?? []));
         // If allocations relationship wasn't included, query allocations directly
         if (empty($nodeAllocations)) {
             $allocQuery = petroXApplicationApiPaginated($params, 'nodes/' . $node['id'] . '/allocations');

@@ -3,7 +3,7 @@
 [![PHP Version](https://img.shields.io/badge/PHP-8.0%20--%208.3%2B-blue.svg)](https://php.net/)
 [![WHMCS Compatibility](https://img.shields.io/badge/WHMCS-8.0%2B-green.svg)](https://whmcs.com/)
 [![Pterodactyl](https://img.shields.io/badge/Pterodactyl-v1.x%20%26%20v2.x-orange.svg)](https://pterodactyl.io/)
-[![Tests](https://img.shields.io/badge/Test%20Suite-15%20Passing-brightgreen.svg)](tests/test_runner.php)
+[![Tests](https://img.shields.io/badge/Test%20Suite-21%20Passing-brightgreen.svg)](tests/test_runner.php)
 
 **PetroX** is a premier, enterprise-grade server provisioning and management module for WHMCS, engineered specifically for game hosting providers, cloud infrastructure services, and enterprise game server management.
 
@@ -320,9 +320,15 @@ php tests/test_runner.php
 [PASS] Test 13: Idempotent service retry without creating duplicate servers
 [PASS] Test 14: Network timeouts, malformed JSON, and server-side 5xx errors
 [PASS] Test 15: Backward compatibility with existing configuration & v1/v2 dual support
+[PASS] Test 16: Password change via petrox_ChangePassword (PATCH /api/application/users/{id})
+[PASS] Test 17: Server reinstallation and admin custom buttons (POST /api/application/servers/{id}/reinstall)
+[PASS] Test 18: Multi-port allocation build patch deduplication and primary protection
+[PASS] Test 19: Port range calculations, thread core 0, and multi-homed IP affinity
+[PASS] Test 20: Universal Fractal relationships extraction (root vs attributes)
+[PASS] Test 21: WHMCS Hook safety on 404 client edit and missing server configuration
 
 ========================================
-Test Summary: 15 Passed, 0 Failed, 15 Total (100% Pass Rate)
+Test Summary: 21 Passed, 0 Failed, 21 Total (100% Pass Rate)
 ========================================
 ```
 
