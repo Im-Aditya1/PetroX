@@ -364,13 +364,9 @@ function petroXGetHostname(array $params)
     }
 
     // Strip existing scheme prefix to prevent duplicate protocols (e.g. https://https://...)
+    $isHttps = !empty($params['serversecure']) || str_starts_with(strtolower($params['serverhostname'] ?? ''), 'https://');
     $hostname = preg_replace('#^https?://#i', '', $hostname);
-
-    if (ip2long($hostname) !== false) {
-        $hostname = 'http://' . $hostname;
-    } else {
-        $hostname = (!empty($params['serversecure']) ? 'https://' : 'http://') . $hostname;
-    }
+    $hostname = ($isHttps ? 'https://' : 'http://') . $hostname;
     return rtrim($hostname, '/');
 }
 
@@ -453,8 +449,10 @@ function getCurl_init(string $url, mixed $method)
     curl_setopt($curl, CURLOPT_POSTREDIR, CURL_REDIR_POST_301);
     curl_setopt($curl, CURLOPT_TIMEOUT, 30);
     curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 10);
-    curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 1);
-    curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
+    $host = parse_url($url, PHP_URL_HOST) ?? '';
+    $isRawIp = (ip2long($host) !== false);
+    curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, $isRawIp ? 0 : 1);
+    curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, $isRawIp ? 0 : 2);
     return $curl;
 }
 
