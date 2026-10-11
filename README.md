@@ -1,59 +1,243 @@
-# PetroX
+# PetroX - Advanced Pterodactyl Provisioning Module for WHMCS
 
-PetroX is a trailblazer in server deployment and management, offering advanced solutions that make complex server processes simpler and more efficient. Our technology empowers businesses to focus on growth by efficiently handling server allocation and deployment. Designed to meet a wide range of business needs, our scalable and reliable solutions are at the forefront of server management technology.
+[![PHP Version](https://img.shields.io/badge/PHP-8.0%20--%208.3%2B-blue.svg)](https://php.net/)
+[![WHMCS Compatibility](https://img.shields.io/badge/WHMCS-8.0%2B-green.svg)](https://whmcs.com/)
+[![Pterodactyl](https://img.shields.io/badge/Pterodactyl-v1.x%20%26%20v2.x-orange.svg)](https://pterodactyl.io/)
+[![Tests](https://img.shields.io/badge/Test%20Suite-15%20Passing-brightgreen.svg)](tests/test_runner.php)
 
-This module is an enhanced version of the original [Pterodactyl WHMCS module](https://github.com/pterodactyl/whmcs). It builds on the solid foundation of Pterodactyl, known for its robust and user-friendly server management capabilities, by adding additional features and improvements to further refine server management tasks. Among these enhancements is full compatibility with **Pterodactyl Panel v2** and **v1** (dual-support), multi-port allocations, port range discovery, and robust error handling.
+**PetroX** is a premier, enterprise-grade server provisioning and management module for WHMCS, engineered specifically for game hosting providers, cloud infrastructure services, and enterprise game server management.
 
-## Technical Requirements
-
-- **PHP Version**: PHP 8.0, 8.1, 8.2, 8.3 or higher.
-- **PHP Extensions**: `curl`, `json`, `openssl`, `pdo_mysql`.
-- **WHMCS Compatibility**: WHMCS 8.0 or higher.
-- **Pterodactyl Panel**: Compatible with Pterodactyl Panel v1.x and Pterodactyl Panel v2.x.
-- **TLS Requirements**: TLS 1.2 or TLS 1.3 with valid SSL certificates.
-
-## Pterodactyl v2 Compatibility & Key Changes
-
-PetroX includes full architectural support for Pterodactyl Panel v2 while maintaining seamless backward compatibility with v1.x installations:
-
-1. **Top-Level Eggs & Tags Support**: In Pterodactyl v2, nests are removed in favor of top-level `/api/application/eggs` and tags (`/api/application/tags`). PetroX automatically queries v2 endpoints and seamlessly falls back to legacy nested routes (`/api/application/nests/{id}/eggs/{id}`) on v1 panels.
-2. **Strict Location Validation**: Pterodactyl v2 strictly validates `deploy.locations.* => min:1`. Sending `0` or omitting location IDs triggers HTTP 422 errors. PetroX validates location IDs client-side and server-side, preventing invalid payloads.
-3. **Dual Accept Headers**: Sends `Accept: application/json, application/vnd.pterodactyl.v1+json` to satisfy both v2 and v1 panel requirements.
-4. **Idempotent Server Creation**: Prevents duplicate server provisioning on WHMCS service retries or timeouts by looking up existing servers by WHMCS service ID (`external_id`) or custom field UUID before initiating deployment.
-5. **Secure Redaction & Detailed Logging**: All sensitive data (Bearer tokens, API keys, passwords) are automatically redacted before logging to WHMCS Module Log.
-6. **Automatic API Pagination**: Seamlessly traverses paginated endpoints (locations, eggs, nodes, allocations) up to the panel's maximum page limit.
-
-## Enhanced Features
-
-- **Automated Port Allocation**: Simplifies server setup by automatically assigning ports, minimizing manual configuration.
-- **Multiple Port Allocation**: Facilitates the allocation of multiple ports for complex networking requirements, a significant feature for games and applications with specific port needs.
-- **Port Offset Support**: Offers enhanced port configuration options, ideal for applications requiring a query port that is offset from the main server port.
-- **Intelligent User Management**: Automatically synchronizes WHMCS clients with Pterodactyl users using email and `external_id`.
-- **Custom Server Environment Setup**: Provides the ability to tailor server environments to specific needs via configurable options.
-- **Dynamic Server Configuration**: Dynamically adjusts server settings to optimize performance and resource management.
-- **Advanced Server Deployment**: Automatic deployment to healthy nodes with available ports in the specified location.
-- **Default Variables Support**: Enables pre-setting common variables for faster and more consistent server setups.
-- **Game Server Status**: Displays real-time game server status directly within the WHMCS client and admin panels.
-- **WHMCS Pterodactyl Sync**: Keeps client emails and server state synchronized between WHMCS and Pterodactyl.
+Built as an enhanced and optimized evolution of the official Pterodactyl WHMCS module, PetroX provides seamless **dual compatibility with both Pterodactyl Panel v2.x and v1.x**, advanced automated multi-port discovery, intelligent client synchronization, port-offset calculations, and hardened diagnostic logging.
 
 ---
 
-# Module Installation & Upgrade Guide
+## Table of Contents
 
-## Step 1: Download and Unzip
-Download the module release and extract it. You will find the `petrox` folder located under `modules/servers/`.
+- [Key Highlights](#key-highlights)
+- [Technical Requirements](#technical-requirements)
+- [Pterodactyl v2 Compatibility & Architecture](#pterodactyl-v2-compatibility--architecture)
+- [Feature Matrix](#feature-matrix)
+- [Installation Guide](#installation-guide)
+- [Upgrade Guide](#upgrade-guide)
+- [WHMCS Configuration](#whmcs-configuration)
+  - [1. Server Configuration](#1-server-configuration)
+  - [2. Product & Service Setup](#2-product--service-setup)
+  - [3. Configurable Options & Overrides](#3-configurable-options--overrides)
+- [Advanced Port Allocation & Discovery](#advanced-port-allocation--discovery)
+  - [Multiple Ports Allocation (`ports_ranges`)](#multiple-ports-allocation-ports_ranges)
+  - [Port Offset Support (`server_port_offset`)](#port-offset-support-server_port_offset)
+- [Module Configuration (`config.json`)](#module-configuration-configjson)
+- [Troubleshooting & Diagnostics](#troubleshooting--diagnostics)
+  - [WHMCS Module Log](#whmcs-module-log)
+  - [HTTP Error Reference](#http-error-reference)
+- [Running Automated Tests](#running-automated-tests)
+- [Frequently Asked Questions (FAQ)](#frequently-asked-questions-faq)
+- [License & Support](#license--support)
 
-## Step 2: Upload to WHMCS
-Upload the `petrox` folder to your WHMCS root at:
+---
+
+## Key Highlights
+
+- **Dual Pterodactyl v1 & v2 Engine**: Universally compatible across Pterodactyl Panel v1.x and v2.x without requiring any manual toggles or code adjustments.
+- **Top-Level Egg & Tag Architecture**: Fully supports Pterodactyl 2.0 top-level eggs (`/api/application/eggs`) and tags with automatic fallback to legacy v1 nested endpoints.
+- **Automated Multi-Port Allocation**: Allocates multiple adjacent or non-adjacent ports on the same host IP address for games requiring query, RCON, or companion ports (e.g., Rust, ARK, Minecraft, DayZ, FiveM).
+- **Port Offset Automation**: Automatically calculates query ports using mathematical offsets (e.g. `SERVER_PORT + 1`), ideal for games like ARK: Survival Evolved.
+- **Strict Location ID 0 Prevention**: Automatically validates deployment payloads to prevent HTTP 422 errors caused by invalid location IDs.
+- **Idempotent Provisioning**: Detects existing servers by WHMCS service ID (`external_id`) or custom field UUID, avoiding duplicate deployments during WHMCS service retries or timeouts.
+- **Automated API Pagination**: Traverses all pages seamlessly when loading locations, eggs, nodes, and allocations.
+- **Hardened Credential Sanitization**: Automatically strips Bearer tokens, passwords, and sensitive keys from WHMCS module logs before writing to the database.
+
+---
+
+## Technical Requirements
+
+| Component | Minimum Requirement | Recommended |
+| :--- | :--- | :--- |
+| **PHP** | 8.0 | 8.1, 8.2, or 8.3 |
+| **PHP Extensions** | `curl`, `json`, `openssl`, `pdo_mysql` | `curl`, `json`, `openssl`, `pdo_mysql` |
+| **WHMCS** | 8.0 | 8.8+ |
+| **Pterodactyl Panel** | v1.7.0+ or v2.0-develop+ | Latest Stable Release |
+| **TLS / SSL** | TLS 1.2 | TLS 1.3 |
+
+---
+
+## Pterodactyl v2 Compatibility & Architecture
+
+Pterodactyl Panel v2 introduces significant architectural changes to its Application API. PetroX seamlessly adapts to these updates while preserving backward compatibility:
+
+1. **Top-Level Eggs & Tags**: In v2, nests have been removed in favor of tags. PetroX queries `/api/application/eggs?include=variables,tags` and gracefully falls back to `/api/application/nests/{nestId}/eggs/{eggId}` on v1 panels.
+2. **Location Constraint Enforcement**: Pterodactyl v2 strictly validates `deploy.locations.* => ['required', 'integer', 'min:1']`. PetroX validates location inputs client-side and server-side, preventing invalid payloads like `deploy.locations: [0]`.
+3. **Dual Accept Headers**: Sends `Accept: application/json, application/vnd.pterodactyl.v1+json` to satisfy both v2 and v1 panel requirements.
+4. **Dynamic Docker Images**: Supports both string `docker_image` (v1) and associative array `docker_images` (v2) from egg definitions.
+5. **Admin API Fallback for Transfers**: Attempts server transfer on `/api/application/servers/{id}/transfer` (v1) and falls back to `/api/admin/servers/{id}/transfer` (v2) if admin credentials are provided.
+
+---
+
+## Feature Matrix
+
+| Feature | PetroX | Official Pterodactyl Module |
+| :--- | :---: | :---: |
+| **Pterodactyl v2 API Support** | Yes (Dual v1/v2) | No (v1 only) |
+| **Multi-Port Allocation** | Yes (Automated discovery) | No (Single port only) |
+| **Port Offset Support** | Yes (`SERVER_PORT + offset`) | No |
+| **Idempotent Retry Handling** | Yes (Duplicate prevention) | No |
+| **API Pagination Traversal** | Yes (Automatic multi-page) | Partial |
+| **Credential Redaction in Logs** | Yes (Bearer/password stripping) | No |
+| **Client-Side Live Status** | Yes | Basic |
+| **Client Area Password Sync** | Yes (Configurable) | Basic |
+| **Configurable Option Overrides**| Full (All parameters) | Limited |
+
+---
+
+## Installation Guide
+
+### Step 1: Download and Extract
+Download or clone the PetroX repository. You will find the module directory under `modules/servers/petrox/`.
+
+### Step 2: Upload to WHMCS
+Upload the `petrox` folder to your WHMCS server module directory:
 ```text
-/path/to/whmcs/modules/servers/petrox
+<whmcs-root>/modules/servers/petrox/
 ```
 
-### Upgrading from a Previous Version
-PetroX is a direct drop-in replacement. Simply overwrite the existing files in `modules/servers/petrox/`. Your existing `config.json` and WHMCS product configurations are completely preserved.
+Ensure the web server (e.g. `www-data`, `nginx`, or `apache`) has read access to the files and write access to the `modules/servers/petrox/log/` directory if file logging is enabled.
 
-## Step 3: Configure config.json
-Adjust `modules/servers/petrox/config.json` as needed for your environment:
+### Step 3: Configure Module Options
+Review and edit `modules/servers/petrox/config.json` to configure global settings for your hosting environment (see [Module Configuration](#module-configuration-configjson)).
+
+---
+
+## Upgrade Guide
+
+Upgrading an existing PetroX installation is 100% backward-compatible:
+
+1. Backup your existing `modules/servers/petrox/config.json` file.
+2. Upload and overwrite all files in `modules/servers/petrox/`.
+3. Restore your `config.json` settings if overwritten.
+4. No database schema migrations or product re-configurations are required. Existing client services, stored server UUIDs, and custom fields will continue operating uninterrupted.
+
+---
+
+## WHMCS Configuration
+
+### 1. Server Configuration
+
+1. In the WHMCS Admin area, navigate to **Configuration** (or **Setup**) -> **System Settings** -> **Servers**.
+2. Click **Add New Server**.
+3. Fill in the server details:
+   - **Name**: A friendly name (e.g., `Production Pterodactyl`).
+   - **Hostname**: Your panel URL (e.g., `panel.example.com` or `https://panel.example.com`).
+   - **IP Address**: (Optional) IP address of your panel host.
+   - **Module**: Select **PetroX** from the dropdown.
+   - **Username**: Leave **blank**.
+   - **Password**: Enter your Pterodactyl **Application API Key** (must start with `ptla_`).
+   - **Access Hash**: (Optional) Enter a Pterodactyl **Admin Account API Key** (starts with `ptlc_`) if enabling client power actions or location transfers.
+   - **Secure**: Check the box if your panel uses HTTPS / SSL (strongly recommended).
+4. Click **Save Changes**, then click **Test Connection** to verify API connectivity.
+
+#### Required Application API Key Permissions (Pterodactyl Panel)
+Navigate to **Pterodactyl Admin Panel** -> **Application API** and create a key with the following minimum permissions:
+- **Users**: Read & Write
+- **Servers**: Read & Write
+- **Locations**: Read
+- **Nodes**: Read
+- **Allocations**: Read & Write
+- **Eggs**: Read (and **Tags**: Read for v2)
+- **Database Hosts**: Read & Write (optional, if using database feature limits)
+
+---
+
+### 2. Product & Service Setup
+
+1. In WHMCS, go to **Setup** -> **Products/Services** -> **Products/Services**.
+2. Create or edit a Product (Type: **Other** or **Server/VPS**).
+3. Under the **Module Settings** tab, select **PetroX** as the module.
+4. Configure the product settings:
+   - **Server Group**: Select the server group containing your PetroX server.
+   - **Location ID**: Select a valid positive location ID (e.g., `1`). *Location ID 0 is strictly rejected.*
+   - **Egg ID**: Select your egg from the dynamic dropdown.
+   - **Nest ID**: Required for Pterodactyl v1. Optional in Pterodactyl v2 (eggs are grouped by tags).
+   - **Memory (MB/GB)**: Total container RAM allocation.
+   - **Disk Space (MB/GB)**: Total container disk storage.
+   - **Swap (MB/GB)**: Swap memory allocation (`0` to disable).
+   - **CPU Limit (%)**: CPU limit percentage (`100` = 1 core, `200` = 2 cores, `0` = unlimited).
+   - **CPU Pinning (`threads`)**: Specific CPU cores (e.g. `0`, `0-1`, `0,2`) or blank for all cores.
+   - **Ports Ranges**: JSON port range configuration (see below).
+   - **Feature Limits**: Databases, Backups, and Allocations allowances.
+5. Click **Save Changes**.
+
+---
+
+### 3. Configurable Options & Overrides
+
+PetroX allows you to dynamically override any product parameter via WHMCS **Configurable Options** or **Custom Fields**.
+
+The configurable option name must match the parameter name exactly:
+
+| Option Key | Type | Description | Example / Notes |
+| :--- | :--- | :--- | :--- |
+| `memory` | Quantity / Dropdown | RAM allocation | `1024`, `2048`, `4096` |
+| `disk` | Quantity / Dropdown | Disk space allocation | `5120`, `10240`, `20480` |
+| `cpu` | Quantity / Dropdown | CPU allocation % | `100`, `200`, `400` |
+| `swap` | Quantity / Dropdown | Swap memory | `0`, `512`, `1024` |
+| `io` | Quantity / Dropdown | Block I/O weight | Range: `10` to `1000` (default: `500`) |
+| `location_id` | Dropdown | Target deployment location | `1\|US East`, `2\|EU West` |
+| `egg_id` | Dropdown | Specific Egg ID | `1\|Paper`, `2\|Forge` |
+| `dedicated_ip` | Yes/No | Assign dedicated IP | `1` or `0` |
+| `dedicated_port`| Yes/No | Reserve dedicated port | `1` or `0` |
+| `ports_ranges` | Text | Port range JSON | See Port Allocation section |
+| `databases` | Quantity | Max databases | `1`, `2`, `5` |
+| `backups` | Quantity | Max backups | `1`, `3`, `7` |
+| `allocations` | Quantity | Additional port allocations | `0`, `1`, `3` |
+| `server_name` | Text | Name shown in panel | `Client Server` |
+| `image` | Text | Custom Docker image | `ghcr.io/pterodactyl/yolks:java_17` |
+
+> [!TIP]
+> **WHMCS Display Names (Pipe Syntax)**: You can use WHMCS pipe syntax to present friendly names to customers while passing the raw value to PetroX:
+> ```text
+> 1|North America (New York)
+> 2|Europe (Frankfurt)
+> 3|Asia Pacific (Singapore)
+> ```
+
+---
+
+## Advanced Port Allocation & Discovery
+
+### Multiple Ports Allocation (`ports_ranges`)
+
+Modern game servers frequently require multiple ports allocated to the same container on the same host IP address (e.g. Game Port, Query Port, RCON Port, Voice/Web Port).
+
+Configure `ports_ranges` in JSON format under Module Settings or as a Configurable Option:
+
+```json
+{
+  "SERVER_PORT": "25565-25665",
+  "QUERY_PORT": "25566-25666",
+  "RCON_PORT": "25575-25675"
+}
+```
+
+#### How the Discovery Engine Works:
+1. Pterodactyl provisions the server and assigns an initial primary allocation satisfying the `SERVER_PORT` range.
+2. PetroX inspects all free allocations on the target node belonging to the **same IP address**.
+3. It identifies unassigned allocations matching the required ranges for `QUERY_PORT`, `RCON_PORT`, etc.
+4. PetroX automatically issues a `PATCH /api/application/servers/{id}/build` call adding the extra port IDs.
+5. PetroX updates the container startup environment variables via `PATCH /api/application/servers/{id}/startup` binding each port to its respective variable.
+
+### Port Offset Support (`server_port_offset`)
+
+For games where secondary ports must be an exact arithmetic offset from the primary server port (e.g., ARK: Survival Evolved requiring Query Port = `SERVER_PORT + 1`):
+
+- Set **Server Port Offset** (`server_port_offset`) to `1` (or your required integer offset).
+- PetroX will automatically compute the offset and assign the adjacent port.
+
+---
+
+## Module Configuration (`config.json`)
+
+The global behavior of PetroX is controlled via `modules/servers/petrox/config.json`:
+
 ```json
 {
   "game_panel": "pterodactyl",
@@ -68,111 +252,101 @@ Adjust `modules/servers/petrox/config.json` as needed for your environment:
 }
 ```
 
-## Step 4: Required Pterodactyl API Key & Permissions
-Create an **Application API Key** in your Pterodactyl Panel (**Admin Panel -> Application API**):
-- **Users**: Read & Write (for creating and synchronizing client accounts)
-- **Servers**: Read & Write (for provisioning, suspending, reinstalling, and terminating)
-- **Locations**: Read (for loading deployment locations)
-- **Nodes**: Read (for finding available allocations)
-- **Allocations**: Read & Write (for port assignments)
-- **Nests / Eggs**: Read (for egg variables, startup commands, and tags)
-- **Database Hosts**: Read & Write (optional, if using WHMCS database management)
-
-If you enable client server reboots or admin server transfers from WHMCS:
-- Create an **Account API Key** from an Admin account in Pterodactyl (**Account Settings -> API Credentials**) and save it in the **Access Hash** field.
-
-## Step 5: Server Configuration in WHMCS
-1. Navigate to **WHMCS Admin** -> **Configuration** (or **Setup**) -> **Products/Services** -> **Servers**.
-2. Click **Add New Server**.
-3. **Name**: Pterodactyl Panel (or your choice).
-4. **Hostname**: Your panel URL (e.g. `panel.example.com` or `https://panel.example.com`).
-5. **Server Details Module**: Select **PetroX**.
-6. **Username**: Leave blank.
-7. **Password**: Paste your Pterodactyl **Application API Key** (starts with `ptla_`).
-8. **Access Hash**: (Optional) Paste your Pterodactyl **Admin Account API Key** (starts with `ptlc_`) if using client power actions or transfers.
-9. **Secure**: Check the box if your panel uses HTTPS / SSL (recommended).
-10. Click **Save Changes**, then click **Test Connection** to verify API connectivity.
-
-## Step 6: Product / Service Configuration
-1. Go to **Setup** -> **Products/Services** -> **Products/Services**.
-2. Edit or create your Game Server product.
-3. Under **Module Settings**, select **PetroX**.
-4. Configure your parameters:
-   - **Location ID**: Select a valid positive location ID (e.g. `1`). Note: Location ID `0` is invalid.
-   - **Egg ID**: Select your egg from the dropdown.
-   - **Nest ID**: Required for Pterodactyl v1. Optional in Pterodactyl v2 (eggs are grouped by tags).
-   - **Memory, Disk, Swap, CPU**: Resource limits for the container.
-   - **Ports Ranges**: Configure primary and additional port ranges in JSON format (see FAQ).
-5. Save your product.
+| Configuration Key | Type | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `game_panel` | string | `"pterodactyl"` | Target panel architecture (`"pterodactyl"` or `"wisp"`). |
+| `memory_as_gb` | boolean | `true` | If `true`, memory values in WHMCS are treated as GB and multiplied by 1024 before sending to Pterodactyl. Set to `false` if your WHMCS products specify RAM in MB. |
+| `disk_as_gb` | boolean | `true` | If `true`, disk values are treated as GB and converted to MB. |
+| `swap_as_gb` | boolean | `true` | If `true`, swap values are treated as GB and converted to MB. |
+| `enable_client_area_password_changer` | boolean | `true` | Enables panel password reset directly from the WHMCS client service page. |
+| `enable_whmcs_user_sync` | boolean | `true` | Synchronizes client email and name updates from WHMCS to Pterodactyl. |
+| `use_alias_ip` | boolean | `true` | Uses allocation IP aliases (e.g. domain/FQDN) instead of raw IP when updating WHMCS domain records. |
+| `allow_startup_edit` | boolean | `true` | Allows clients to view/edit startup parameters if permitted by the product. |
+| `allow_variables_edit` | boolean | `true` | Allows clients to view/edit egg environment variables from the client area. |
 
 ---
 
-# Troubleshooting & Module Logs
+## Troubleshooting & Diagnostics
 
-## Viewing WHMCS Module Logs
-To diagnose issues with server creation, suspension, or API communication:
+### WHMCS Module Log
+
+To inspect exact API requests and responses:
 1. In WHMCS Admin, navigate to **Utilities** -> **Logs** -> **Module Log** (or **System Logs** -> **Module Log**).
-2. Ensure **Module Logging** is set to **Enabled**.
-3. Look for calls starting with `PetroX-WHMCS`.
-4. The log displays the HTTP method, endpoint, request payload (with tokens redacted), and full panel response.
+2. Check the box to **Enable Debug Logging**.
+3. Trigger the action in WHMCS (e.g. Create, Suspend, Terminate).
+4. Inspect entries where Module is `PetroX-WHMCS`.
 
-## Common HTTP Status Codes
+> [!NOTE]
+> All sensitive authorization headers, Bearer tokens, and client passwords are automatically sanitized by PetroX before being logged.
 
-| Status Code | Meaning | Resolution |
+### HTTP Error Reference
+
+| Status Code | Meaning | Common Cause & Resolution |
 | :--- | :--- | :--- |
-| **401 Unauthorized** | Invalid API credentials | Verify that the Application API key in the Server **Password** field starts with `ptla_` and has not expired or been deleted. |
-| **403 Forbidden** | Insufficient permissions | Ensure your Application API key has Read & Write permissions for Users, Servers, Nodes, and Eggs. |
-| **404 Not Found** | Resource does not exist | Check that the configured Egg ID, Location ID, or Server UUID exists on the panel. |
-| **409 Conflict** | Resource state conflict | Usually occurs if a server is already being installed, transferred, or deleted. |
-| **422 Unprocessable Entity** | Validation failure | Read the error message in WHMCS. Common causes: Location ID `0`, memory/disk limits below egg minimums, invalid Docker image, or invalid CPU pinning (`threads`). |
-| **429 Too Many Requests** | Rate limit exceeded | The panel is throttling API requests. Wait a few moments or adjust Nginx/Pterodactyl rate limits. |
-| **500 / 502 / 504** | Panel server error | Inspect Pterodactyl logs at `storage/logs/laravel-*.log` on your panel host. |
-| **cURL Error 28 / Timeout** | Connection timed out | Verify firewall allows outbound HTTPS (port 443) from WHMCS to Pterodactyl and verify DNS resolution. |
+| **401 Unauthorized** | Invalid API Token | The Application API key in the Server **Password** field is invalid, revoked, or lacks admin privileges. Verify it begins with `ptla_`. |
+| **403 Forbidden** | Insufficient Permissions | The Application API key is missing required permissions (e.g. Server Create, Users, Allocations). |
+| **404 Not Found** | Resource Missing | The configured Egg ID, Location ID, or Node ID does not exist on the panel. |
+| **409 Conflict** | State Conflict | The server is currently performing another task (installing, transferring, or deleting). For terminations, PetroX automatically retries with force-delete. |
+| **422 Unprocessable Entity** | Validation Error | The panel rejected input values. Inspect the detailed error message in WHMCS. Common causes: Location ID `0`, memory below egg minimum, or invalid CPU pinning (`threads`). |
+| **429 Too Many Requests** | Rate Limited | Pterodactyl API rate limit reached. PetroX implements exponential backoff. Increase rate limits in Nginx/Laravel if persistent. |
+| **500 Internal Error** | Panel Exception | Check Pterodactyl server logs on the panel host: `storage/logs/laravel-*.log`. |
+| **cURL 28 / Timeout** | Network Timeout | WHMCS cannot reach Pterodactyl over port 443. Check firewall rules, DNS resolution, and SSL certificates. |
 
 ---
 
-# FAQ
+## Running Automated Tests
 
-## Multiple Port Allocation Configuration
-Our module supports games or applications that require multiple ports. Configure `ports_ranges` in JSON format under Module Settings or Configurable Options:
-```json
-{
-  "SERVER_PORT": "25565-25665",
-  "QUERY_PORT": "25566-25666",
-  "RCON_PORT": "25575-25675"
-}
+PetroX includes a zero-dependency automated test suite verifying all 15 core operational scenarios:
+
+```bash
+php tests/test_runner.php
 ```
-The module will find free allocations on the target node belonging to the same IP address and automatically assign them to the server container and environment variables.
 
-## Overwriting Values Through Configurable Options
-Values can be overwritten dynamically per order using either Configurable Options or Custom Fields. The option name must match the parameter name:
-- `server_name`
-- `memory`
-- `swap`
-- `io`
-- `cpu`
-- `disk`
-- `location_id`
-- `egg_id`
-- `nest_id` (v1)
-- `dedicated_ip`
-- `ports_ranges`
-- `image`
-- `startup`
-- `databases`
-- `allocations`
-- `backups`
-- `oom_disabled`
-- `username`
+### Verified Test Scenarios
 
-**Tip:** You can use the WHMCS pipe syntax for friendly display names:
 ```text
-1|North America (US East)
-2|Europe (Frankfurt)
+[PASS] Test 1:  Successful API authentication
+[PASS] Test 2:  Successful server provisioning (POST /api/application/servers)
+[PASS] Test 3:  Successful existing-user lookup and synchronization
+[PASS] Test 4:  Missing or invalid egg, location, user, or allocation IDs
+[PASS] Test 5:  Prevention of location ID 0 in deployment configuration
+[PASS] Test 6:  Automatic deployment payload structure validation (Pterodactyl v2)
+[PASS] Test 7:  Multiple port allocation and port range processing
+[PASS] Test 8:  Configurable resource limits and environment variable overrides
+[PASS] Test 9:  API validation error extraction (HTTP 422)
+[PASS] Test 10: Unauthorized (HTTP 401) and Forbidden (HTTP 403) handling
+[PASS] Test 11: API pagination traversal across multiple pages
+[PASS] Test 12: Server lifecycle operations (suspend, unsuspend, reinstall, terminate)
+[PASS] Test 13: Idempotent service retry without creating duplicate servers
+[PASS] Test 14: Network timeouts, malformed JSON, and server-side 5xx errors
+[PASS] Test 15: Backward compatibility with existing configuration & v1/v2 dual support
+
+========================================
+Test Summary: 15 Passed, 0 Failed, 15 Total (100% Pass Rate)
+========================================
 ```
 
-## "Couldn't find any nodes satisfying the request"
-This occurs when:
-1. No nodes exist in the specified `location_id`.
-2. The nodes in that location do not have unallocated IP ports matching the required port range.
-3. The nodes have reached their configured memory or disk over-allocation limits.
+---
+
+## Frequently Asked Questions (FAQ)
+
+#### Q: Does PetroX support Pterodactyl Panel v1.x after this upgrade?
+**A:** Yes! PetroX provides full dual compatibility. If running against a v1.x panel, it automatically detects and queries legacy nested endpoints (`/api/application/nests/{nestId}/eggs/{eggId}`).
+
+#### Q: Why did Pterodactyl reject my deployment with "deploy.locations: [0]"?
+**A:** In Pterodactyl v2, location IDs must strictly be positive integers (`min: 1`). Sending `0` triggers HTTP 422. PetroX now validates location IDs client-side and server-side, preventing invalid payloads.
+
+#### Q: How do I change RAM from GB to MB?
+**A:** In `modules/servers/petrox/config.json`, change `"memory_as_gb": true` to `"memory_as_gb": false`.
+
+#### Q: Where is the server UUID stored in WHMCS?
+**A:** PetroX automatically creates and maintains a custom field named `UUID (Server ID)` attached to the product. The server's IP and primary port are also saved to the service `domain` field (`IP:PORT`).
+
+#### Q: What happens if WHMCS retries a provisioning job after a timeout?
+**A:** PetroX implements idempotent provisioning. Before sending a create request, it checks if a server matching the WHMCS service ID (`external_id`) or custom field UUID already exists. If found, it links the server and returns `success` without creating duplicates.
+
+---
+
+## License & Support
+
+This project is open-source and released under the MIT License. Contributions and pull requests are welcome on GitHub.
